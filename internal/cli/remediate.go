@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/clusterhealth"
+	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/clusterinfo"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/events"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/pdb"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/resources"
@@ -78,7 +79,8 @@ func NewRemediateCmd() *cobra.Command {
 			}
 
 			e := engine.Engine{Analyzers: []analyzer.Analyzer{
-				&clusterhealth.Analyzer{Client: kclient},
+				&clusterinfo.Analyzer{Client: kclient},
+				&clusterhealth.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces, CollectPodLogHints: true, MaxPodLogHints: 3, PodLogTailLines: 200},
 				&events.Analyzer{Client: kclient, Since: f.EventsSince},
 				&workloads.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
 				&resources.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
@@ -97,21 +99,24 @@ func NewRemediateCmd() *cobra.Command {
 			system := strings.TrimSpace(`You are Kube Ops Copilot, an approval-driven Kubernetes SRE assistant.
 You must be evidence-first. Use the report as truth; do not invent cluster facts.
 
-Goal: choose the single best production remediation for the current evidence.
+Operating principle: investigation-first, then the smallest safe change.
+
 Constraints:
 - You must never apply changes.
-- Prefer the smallest safe change with clear verification.
-- Only propose a plan if evidence supports it.
-- Allowed executable operation types:
-	- rollout_restart_deployment
-	- scale_deployment
+- Prefer read-only verification steps before recommending a change.
+- If evidence is insufficient to justify an executable remediation, output a null plan.
+- Treat restarts as a last resort: do NOT propose a restart/rollout restart unless you can explain why it is likely to reduce user impact and does not just hide an underlying issue.
+
+Allowed executable operation types (and ONLY these):
+- rollout_restart_deployment
+- scale_deployment
 
 Output format requirements:
-- First, concise Markdown explaining the one chosen remediation and why it's the best.
+- First, professional concise Markdown with: triage order, top hypotheses, and next read-only verification commands.
 - Then EXACTLY ONE fenced code block labeled json containing either an ExecutionPlan object or null.
 `)
 
-			user := fmt.Sprintf("Here is the deterministic diagnosis report as JSON:\n\n%s\n\nReturn the best single remediation (or null plan if none safe). ExecutionPlan schema:\n{\n  \"apiVersion\": \"kube-ops-copilot/v1alpha1\",\n  \"kind\": \"ExecutionPlan\",\n  \"createdAt\": \"RFC3339\",\n  \"approvalId\": \"\",\n  \"operation\": {\n    \"type\": \"rollout_restart_deployment|scale_deployment\",\n    \"namespace\": \"...\",\n    \"name\": \"...\",\n    \"replicas\": 3,\n    \"reason\": \"...\"\n  },\n  \"verify\": { \"timeoutSeconds\": 180 }\n}\nNotes: approvalId must be empty string; omit replicas for rollout_restart_deployment; replicas required for scale_deployment.", string(repJSON))
+			user := fmt.Sprintf("Here is the deterministic diagnosis report as JSON:\n\n%s\n\nTask:\n1) Provide triage order, likely root causes, and the next read-only verification commands (kubectl + PromQL ideas if monitoring exists).\n2) Provide the single best production remediation (if any).\n\nRules for remediation choice:\n- Only emit an executable plan if evidence supports it in THIS snapshot.\n- If root cause is unclear, emit null and focus on what to verify next.\n- If you propose a restart, justify it with evidence and include post-change verification.\n\nOutput format requirements:\n- First, Markdown.\n- Then a fenced code block: ```json ...``` containing either an ExecutionPlan object or null.\n\nExecutionPlan JSON schema (must match exactly):\n{\n  \"apiVersion\": \"kube-ops-copilot/v1alpha1\",\n  \"kind\": \"ExecutionPlan\",\n  \"createdAt\": \"RFC3339\",\n  \"approvalId\": \"\",\n  \"operation\": {\n    \"type\": \"rollout_restart_deployment|scale_deployment\",\n    \"namespace\": \"...\",\n    \"name\": \"...\",\n    \"replicas\": 3,\n    \"reason\": \"...\"\n  },\n  \"verify\": { \"timeoutSeconds\": 180 }\n}\n\nNotes:\n- For rollout_restart_deployment, omit replicas.\n- For scale_deployment, replicas is required.\n- approvalId must be empty string.\n", string(repJSON))
 
 			resp, err := client.Complete(ctx, llm.Request{System: system, User: user, Model: f.Model, Temperature: f.Temperature})
 			if err != nil {
@@ -223,8 +228,8 @@ Output format requirements:
 		},
 	}
 
-	cmd.Flags().StringVar(&f.Kubeconfig, "kubeconfig", "", "Path to kubeconfig (defaults to in-cluster or ~/.kube/config)")
-	cmd.Flags().StringVar(&f.Context, "context", "", "Kubeconfig context name")
+	cmd.Flags().StringVar(&f.Kubeconfig, "kubeconfig", "", "Path to kubeconfig (default: in-cluster; else $KUBECONFIG; else ~/.kube/config)")
+	cmd.Flags().StringVar(&f.Context, "context", "", "Kubeconfig context override (default: current-context)")
 	cmd.Flags().DurationVar(&f.Timeout, "timeout", 2*time.Minute, "Overall remediate timeout")
 	cmd.Flags().DurationVar(&f.EventsSince, "events-since", 60*time.Minute, "How far back to analyze Warning events")
 	cmd.Flags().BoolVar(&f.IncludeSystemNamespaces, "include-system-namespaces", false, "Include kube-system and other system namespaces in workload/resource/policy checks")

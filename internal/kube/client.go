@@ -2,8 +2,6 @@ package kube
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -24,26 +22,28 @@ func NewClient(cfg Config) (*kubernetes.Clientset, error) {
 }
 
 func loadRESTConfig(cfg Config) (*rest.Config, error) {
+	// If kubeconfig is not specified, prefer in-cluster config. If not in-cluster,
+	// fall back to kubectl-like loading rules (respects $KUBECONFIG and ~/.kube/config).
 	if cfg.Kubeconfig == "" {
 		if c, err := rest.InClusterConfig(); err == nil {
 			return c, nil
 		}
-
-		home, _ := os.UserHomeDir()
-		candidate := filepath.Join(home, ".kube", "config")
-		if _, err := os.Stat(candidate); err == nil {
-			cfg.Kubeconfig = candidate
-		}
 	}
 
-	if cfg.Kubeconfig == "" {
-		return nil, fmt.Errorf("no kubeconfig provided and in-cluster config not available")
+	var loader *clientcmd.ClientConfigLoadingRules
+	if cfg.Kubeconfig != "" {
+		loader = &clientcmd.ClientConfigLoadingRules{ExplicitPath: cfg.Kubeconfig}
+	} else {
+		loader = clientcmd.NewDefaultClientConfigLoadingRules()
 	}
-
-	loader := &clientcmd.ClientConfigLoadingRules{ExplicitPath: cfg.Kubeconfig}
 	overrides := &clientcmd.ConfigOverrides{}
 	if cfg.Context != "" {
 		overrides.CurrentContext = cfg.Context
 	}
-	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loader, overrides).ClientConfig()
+
+	restCfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loader, overrides).ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("load kubeconfig: %w", err)
+	}
+	return restCfg, nil
 }

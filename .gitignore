@@ -5,4 +5,4 @@
 *.test
 /.idea/
 /.vscode/
-./kube-ops-copilot
+kube-ops-copilot

@@ -11,6 +11,7 @@ import (
 
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/clusterhealth"
+	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/clusterinfo"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/events"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/pdb"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/resources"
@@ -65,7 +66,8 @@ func NewSuggestCmd() *cobra.Command {
 			}
 
 			e := engine.Engine{Analyzers: []analyzer.Analyzer{
-				&clusterhealth.Analyzer{Client: kclient},
+				&clusterinfo.Analyzer{Client: kclient},
+				&clusterhealth.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces, CollectPodLogHints: true, MaxPodLogHints: 3, PodLogTailLines: 200},
 				&events.Analyzer{Client: kclient, Since: f.EventsSince},
 				&workloads.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
 				&resources.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
@@ -131,8 +133,8 @@ Output professional, concise Markdown.`)
 		},
 	}
 
-	cmd.Flags().StringVar(&f.Kubeconfig, "kubeconfig", "", "Path to kubeconfig (defaults to in-cluster or ~/.kube/config)")
-	cmd.Flags().StringVar(&f.Context, "context", "", "Kubeconfig context name")
+	cmd.Flags().StringVar(&f.Kubeconfig, "kubeconfig", "", "Path to kubeconfig (default: in-cluster; else $KUBECONFIG; else ~/.kube/config)")
+	cmd.Flags().StringVar(&f.Context, "context", "", "Kubeconfig context override (default: current-context)")
 	cmd.Flags().DurationVar(&f.Timeout, "timeout", 60*time.Second, "Overall suggest timeout")
 	cmd.Flags().DurationVar(&f.EventsSince, "events-since", 60*time.Minute, "How far back to analyze Warning events")
 	cmd.Flags().BoolVar(&f.IncludeSystemNamespaces, "include-system-namespaces", false, "Include kube-system and other system namespaces in workload/resource/policy checks")

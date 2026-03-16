@@ -8,6 +8,7 @@ import (
 
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/clusterhealth"
+	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/clusterinfo"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/events"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/pdb"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/resources"
@@ -45,7 +46,8 @@ func NewDiagnoseCmd() *cobra.Command {
 			}
 
 			e := engine.Engine{Analyzers: []analyzer.Analyzer{
-				&clusterhealth.Analyzer{Client: client},
+				&clusterinfo.Analyzer{Client: client},
+				&clusterhealth.Analyzer{Client: client, IncludeSystemNamespaces: f.IncludeSystemNamespaces, CollectPodLogHints: true, MaxPodLogHints: 3, PodLogTailLines: 200},
 				&events.Analyzer{Client: client, Since: f.EventsSince},
 				&workloads.Analyzer{Client: client, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
 				&resources.Analyzer{Client: client, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
@@ -76,8 +78,8 @@ func NewDiagnoseCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&f.Kubeconfig, "kubeconfig", "", "Path to kubeconfig (defaults to in-cluster or ~/.kube/config)")
-	cmd.Flags().StringVar(&f.Context, "context", "", "Kubeconfig context name")
+	cmd.Flags().StringVar(&f.Kubeconfig, "kubeconfig", "", "Path to kubeconfig (default: in-cluster; else $KUBECONFIG; else ~/.kube/config)")
+	cmd.Flags().StringVar(&f.Context, "context", "", "Kubeconfig context override (default: current-context)")
 	cmd.Flags().StringVar(&f.Output, "output", string(render.FormatMarkdown), "Output format: markdown|json")
 	cmd.Flags().DurationVar(&f.Timeout, "timeout", 30*time.Second, "Overall diagnose timeout")
 	cmd.Flags().DurationVar(&f.EventsSince, "events-since", 60*time.Minute, "How far back to analyze Warning events")

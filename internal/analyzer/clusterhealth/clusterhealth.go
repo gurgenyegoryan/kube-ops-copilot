@@ -17,6 +17,11 @@ import (
 type Analyzer struct {
 	Client *kubernetes.Clientset
 	Now    func() time.Time
+
+	IncludeSystemNamespaces bool
+	CollectPodLogHints      bool
+	MaxPodLogHints          int
+	PodLogTailLines         int
 }
 
 func (a *Analyzer) Name() string { return "clusterhealth" }
@@ -87,6 +92,8 @@ func (a *Analyzer) Run(ctx context.Context) (analyzer.Result, error) {
 	}
 	res.Evidence = append(res.Evidence, model.Evidence{Signal: fmt.Sprintf("observed %d pods in all namespaces", len(pods.Items))})
 
+	logCandidates := make(map[string]logCandidate)
+
 	pending := 0
 	crashLoop := 0
 	oom := 0
@@ -95,6 +102,9 @@ func (a *Analyzer) Run(ctx context.Context) (analyzer.Result, error) {
 	cutoff := now().Add(-30 * time.Minute)
 
 	for _, p := range pods.Items {
+		if !a.IncludeSystemNamespaces && isSystemNamespace(p.Namespace) {
+			continue
+		}
 		if p.Status.Phase == v1.PodPending {
 			pending++
 			res.Evidence = append(res.Evidence, model.Evidence{Signal: fmt.Sprintf("pod pending: %s/%s", p.Namespace, p.Name)})
@@ -104,10 +114,12 @@ func (a *Analyzer) Run(ctx context.Context) (analyzer.Result, error) {
 			if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
 				crashLoop++
 				res.Evidence = append(res.Evidence, model.Evidence{Signal: fmt.Sprintf("CrashLoopBackOff: %s/%s container=%s", p.Namespace, p.Name, cs.Name)})
+				addLogCandidate(logCandidates, logCandidate{Namespace: p.Namespace, Pod: p.Name, Container: cs.Name, Score: 100, PreferPrevious: true, Hint: "CrashLoopBackOff"})
 			}
 			if cs.LastTerminationState.Terminated != nil && cs.LastTerminationState.Terminated.ExitCode == 137 {
 				oom++
 				res.Evidence = append(res.Evidence, model.Evidence{Signal: fmt.Sprintf("recent termination exit=137 (OOM-kill likely): %s/%s container=%s", p.Namespace, p.Name, cs.Name)})
+				addLogCandidate(logCandidates, logCandidate{Namespace: p.Namespace, Pod: p.Name, Container: cs.Name, Score: 80, PreferPrevious: true, Hint: "exit=137"})
 			}
 			if cs.RestartCount > 0 && p.CreationTimestamp.Time.Before(cutoff) {
 				recentRestarts++
@@ -136,6 +148,41 @@ func (a *Analyzer) Run(ctx context.Context) (analyzer.Result, error) {
 						return &v
 					}(),
 				})
+				if class := classifyTermination(exitCode, reason, cs.State.Waiting); class == terminationCrashLike {
+					score := 40
+					if cs.RestartCount >= 5 {
+						score = 60
+					}
+					addLogCandidate(logCandidates, logCandidate{Namespace: p.Namespace, Pod: p.Name, Container: cs.Name, Score: score, PreferPrevious: true, Hint: fmt.Sprintf("restarts=%d class=%s", cs.RestartCount, class)})
+				}
+			}
+		}
+	}
+
+	if a.CollectPodLogHints {
+		maxHints := a.MaxPodLogHints
+		if maxHints <= 0 {
+			maxHints = 3
+		}
+		tailLines := a.PodLogTailLines
+		if tailLines <= 0 {
+			tailLines = 200
+		}
+		hints := topLogCandidates(logCandidates, maxHints)
+		for _, c := range hints {
+			// Prefer previous logs for crash loops/restarts; fall back to current.
+			if c.PreferPrevious {
+				if hint, err := fetchPodLogHint(ctx, a.Client, c.Namespace, c.Pod, c.Container, true, tailLines); err == nil && hint != "" {
+					res.Evidence = append(res.Evidence, model.Evidence{Signal: fmt.Sprintf("pod log hint (previous): %s/%s container=%s hint=%q", c.Namespace, c.Pod, c.Container, hint)})
+					continue
+				} else if err != nil {
+					res.Unknowns = append(res.Unknowns, fmt.Sprintf("unable to fetch previous logs: %s/%s container=%s: %v", c.Namespace, c.Pod, c.Container, err))
+				}
+			}
+			if hint, err := fetchPodLogHint(ctx, a.Client, c.Namespace, c.Pod, c.Container, false, tailLines); err == nil && hint != "" {
+				res.Evidence = append(res.Evidence, model.Evidence{Signal: fmt.Sprintf("pod log hint: %s/%s container=%s hint=%q", c.Namespace, c.Pod, c.Container, hint)})
+			} else if err != nil {
+				res.Unknowns = append(res.Unknowns, fmt.Sprintf("unable to fetch logs: %s/%s container=%s: %v", c.Namespace, c.Pod, c.Container, err))
 			}
 		}
 	}
@@ -326,6 +373,106 @@ func (a *Analyzer) Run(ctx context.Context) (analyzer.Result, error) {
 	}
 
 	return res, nil
+}
+
+type logCandidate struct {
+	Namespace      string
+	Pod            string
+	Container      string
+	Score          int
+	PreferPrevious bool
+	Hint           string
+}
+
+func addLogCandidate(m map[string]logCandidate, c logCandidate) {
+	key := c.Namespace + "/" + c.Pod + "/" + c.Container
+	if existing, ok := m[key]; ok {
+		if c.Score > existing.Score {
+			m[key] = c
+		}
+		return
+	}
+	m[key] = c
+}
+
+func topLogCandidates(m map[string]logCandidate, n int) []logCandidate {
+	items := make([]logCandidate, 0, len(m))
+	for _, v := range m {
+		items = append(items, v)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Score == items[j].Score {
+			if items[i].Namespace == items[j].Namespace {
+				return items[i].Pod < items[j].Pod
+			}
+			return items[i].Namespace < items[j].Namespace
+		}
+		return items[i].Score > items[j].Score
+	})
+	if n <= 0 {
+		n = 3
+	}
+	if len(items) > n {
+		items = items[:n]
+	}
+	return items
+}
+
+func fetchPodLogHint(ctx context.Context, client *kubernetes.Clientset, namespace, pod, container string, previous bool, tailLines int) (string, error) {
+	if tailLines <= 0 {
+		tailLines = 200
+	}
+	t := int64(tailLines)
+	limitBytes := int64(64 * 1024)
+	opts := &v1.PodLogOptions{
+		Container:  container,
+		Previous:   previous,
+		TailLines:  &t,
+		LimitBytes: &limitBytes,
+	}
+	b, err := client.CoreV1().Pods(namespace).GetLogs(pod, opts).Do(ctx).Raw()
+	if err != nil {
+		return "", err
+	}
+	hint := extractLogHint(string(b))
+	return hint, nil
+}
+
+func extractLogHint(logText string) string {
+	lines := strings.Split(logText, "\n")
+	keywords := []string{"panic", "fatal", "error", "exception", "traceback", "segfault", "connection refused", "timeout", "timed out", "oom", "killed", "permission denied", "no such file", "failed"}
+
+	// Scan from the end to find the most recent interesting line.
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		if l == "" {
+			continue
+		}
+		ll := strings.ToLower(l)
+		for _, k := range keywords {
+			if strings.Contains(ll, k) {
+				return truncateOneLine(l, 220)
+			}
+		}
+	}
+
+	// Fallback: last non-empty line
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := strings.TrimSpace(lines[i])
+		if l != "" {
+			return truncateOneLine(l, 220)
+		}
+	}
+	return ""
+}
+
+func truncateOneLine(s string, max int) string {
+	s = strings.ReplaceAll(s, "\t", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return strings.TrimSpace(s[:max]) + "…"
 }
 
 type restartSample struct {

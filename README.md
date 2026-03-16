@@ -41,6 +41,10 @@ docker pull ghcr.io/<org>/<repo>:vX.Y.Z
 ### 1) Diagnose
 
 ```bash
+# Defaults: in-cluster config; otherwise uses $KUBECONFIG or ~/.kube/config and the kubeconfig current-context.
+./kube-ops-copilot diagnose --output markdown
+
+# Override kubeconfig/context explicitly when needed
 ./kube-ops-copilot diagnose --kubeconfig ~/.kube/config --context prod --output markdown
 ```
 
@@ -52,7 +56,7 @@ If you pass `--plan-out`, it also asks the LLM for exactly one best executable r
 
 ```bash
 export OPENAI_API_KEY=... # or KUBE_OPS_COPILOT_OPENAI_API_KEY
-./kube-ops-copilot suggest --llm-provider openai --llm-model gpt-4.1-mini --kubeconfig ~/.kube/config --context prod
+./kube-ops-copilot suggest --llm-provider openai --llm-model gpt-4.1-mini
 ```
 
 Emit a plan file (if a safe executable plan is available):
@@ -74,6 +78,12 @@ export OPENAI_API_KEY=...
 export KUBE_OPS_COPILOT_N8N_WEBHOOK_URL='https://<your-n8n>/webhook/koc-approval'
 export KUBE_OPS_COPILOT_N8N_BEARER_TOKEN='optional-shared-secret'
 
+./kube-ops-copilot remediate --llm-provider openai --llm-model gpt-4.1-mini \
+	--approval-provider n8n \
+	--wait-approval \
+	--apply
+
+# Override kubeconfig/context explicitly when needed
 ./kube-ops-copilot remediate --llm-provider openai --llm-model gpt-4.1-mini \
 	--kubeconfig ~/.kube/config --context prod \
 	--approval-provider n8n \

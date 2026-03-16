@@ -108,8 +108,8 @@ func NewExecuteCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&f.PlanPath, "plan", "", "Path to execution plan JSON (required)")
-	cmd.Flags().StringVar(&f.Kubeconfig, "kubeconfig", "", "Path to kubeconfig (defaults to in-cluster or ~/.kube/config)")
-	cmd.Flags().StringVar(&f.Context, "context", "", "Kubeconfig context name")
+	cmd.Flags().StringVar(&f.Kubeconfig, "kubeconfig", "", "Path to kubeconfig (default: in-cluster; else $KUBECONFIG; else ~/.kube/config)")
+	cmd.Flags().StringVar(&f.Context, "context", "", "Kubeconfig context override (default: current-context)")
 	cmd.Flags().StringVar(&f.ApprovalID, "approval-id", "", "Approval identifier (ticket, Slack thread, n8n approval id)")
 	cmd.Flags().StringVar(&f.ApprovalProvider, "approval-provider", "manual", "Approval provider: manual|n8n|telegram|slack")
 	cmd.Flags().BoolVar(&f.Approve, "approve", false, "Explicitly approve execution (required)")
