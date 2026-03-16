@@ -63,18 +63,20 @@ Emit a plan file (if a safe executable plan is available):
 	--plan-out /tmp/kube-ops-copilot-plan.json
 ```
 
-### 2b) (Recommended) One-command remediation (Telegram approval)
+### 2b) (Recommended) One-command remediation (n8n → Telegram approval)
 
 This runs: diagnose → LLM proposes exactly one best executable plan → sends approval → waits → applies after approval.
 
 ```bash
 export OPENAI_API_KEY=...
-export KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN='...'
-export KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID='...'
+
+# Your CLI host only needs access to n8n.
+export KUBE_OPS_COPILOT_N8N_WEBHOOK_URL='https://<your-n8n>/webhook/koc-approval'
+export KUBE_OPS_COPILOT_N8N_BEARER_TOKEN='optional-shared-secret'
 
 ./kube-ops-copilot remediate --llm-provider openai --llm-model gpt-4.1-mini \
 	--kubeconfig ~/.kube/config --context prod \
-	--approval-provider telegram \
+	--approval-provider n8n \
 	--wait-approval \
 	--apply
 ```
@@ -103,22 +105,17 @@ To apply changes:
 	--dry-run=false
 ```
 
-## Notifications (Slack / Telegram)
+## Notifications (n8n → Telegram)
 
 Both `diagnose` and `execute` support `--notify`.
 
-### Slack (webhook)
+Recommended production setup: route notifications through n8n, and let n8n deliver them to Telegram.
 
 ```bash
-export KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'
+export KUBE_OPS_COPILOT_N8N_WEBHOOK_URL='https://<your-n8n>/webhook/koc-approval'
+export KUBE_OPS_COPILOT_N8N_BEARER_TOKEN='optional-shared-secret'
+
 ./kube-ops-copilot diagnose --notify ...
-```
-
-### Telegram (bot)
-
-```bash
-export KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN='123456:ABC...'
-export KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID='-1001234567890'
 ./kube-ops-copilot execute --notify ...
 ```
 
@@ -159,7 +156,7 @@ This mode calls an n8n webhook for both request creation and status checks.
 Configuration:
 
 ```bash
-export KUBE_OPS_COPILOT_N8N_WEBHOOK_URL='https://<n8n>/webhook/<id>'
+export KUBE_OPS_COPILOT_N8N_WEBHOOK_URL='https://<your-n8n>/webhook/koc-approval'
 export KUBE_OPS_COPILOT_N8N_BEARER_TOKEN='optional-shared-secret'
 ```
 
@@ -199,8 +196,7 @@ That workflow expects these n8n environment variables:
 - `KOC_PUBLIC_BASE_URL` (public base URL of your n8n instance, e.g. `https://n8n.example.com`)
 - `KOC_DECISION_SECRET` (shared secret added to approve/deny button URLs)
 - Optional: `KOC_N8N_BEARER_TOKEN` (must match `KUBE_OPS_COPILOT_N8N_BEARER_TOKEN` if you set it)
-- Optional: `KOC_TELEGRAM_BOT_TOKEN`, `KOC_TELEGRAM_CHAT_ID` (to send Telegram button messages)
-- Optional: `KOC_SLACK_WEBHOOK_URL` (to send Slack button messages)
+- Required: `KOC_TELEGRAM_BOT_TOKEN`, `KOC_TELEGRAM_CHAT_ID` (where n8n sends approval buttons)
 
 ### Provider: Telegram (reply-based)
 
@@ -227,42 +223,7 @@ Note: this implementation polls `getUpdates` and scans recent messages. Use uniq
 
 ### Provider: Slack (interactive buttons)
 
-This mode:
-
-1) Writes a pending approval record to a local store file.
-2) Optionally posts an interactive Slack message (approve/deny buttons) via webhook.
-3) Receives the button callback via a small HTTP server and updates the local store.
-4) `execute` checks the decision by reading the local store.
-
-Configuration:
-
-```bash
-export KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'
-export KUBE_OPS_COPILOT_SLACK_SIGNING_SECRET='from Slack app settings'
-export KUBE_OPS_COPILOT_PUBLIC_BASE_URL='https://your-public-hostname'
-export KUBE_OPS_COPILOT_APPROVAL_STORE='/var/lib/kube-ops-copilot/approvals.json'
-```
-
-Run the interactivity callback server (must be reachable by Slack):
-
-```bash
-./kube-ops-copilot approval serve --provider slack --listen :8088
-```
-
-In your Slack app configuration, set **Interactivity Request URL** to:
-
-```
-https://your-public-hostname/slack/actions
-```
-
-Request + execute:
-
-```bash
-./kube-ops-copilot approval request --provider slack --plan examples/execute-restart-deployment.json --write-plan
-./kube-ops-copilot execute --plan examples/execute-restart-deployment.json --approval-provider slack --approval-id <approval-id> --approve --wait-approval --dry-run=false
-```
-
-Important: Slack approval status is stored locally. Run `approval serve`, `approval request`, and `execute` on the same host (or use a shared/persistent `KUBE_OPS_COPILOT_APPROVAL_STORE`).
+Slack support exists in the codebase, but the recommended production setup in this repo is **n8n → Telegram**.
 
 ## CI / Lint
 

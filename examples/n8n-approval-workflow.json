@@ -19,6 +19,19 @@
     },
     {
       "parameters": {
+        "jsCode": "// Normalize input so downstream nodes can reliably read `action` at the root.\n// n8n may put the request JSON under `$json.body` depending on version/settings.\nconst body = ($json && typeof $json === 'object' && $json.body && typeof $json.body === 'object') ? $json.body : $json;\nconst action = String(body.action || '').trim();\n\n// Preserve headers/query too (useful for auth/diagnostics).\nconst headers = ($json && $json.headers && typeof $json.headers === 'object') ? $json.headers : {};\nconst query = ($json && $json.query && typeof $json.query === 'object') ? $json.query : {};\n\nreturn [{ json: { ...body, action, headers, query } }];"
+      },
+      "id": "Code_Normalize_Input",
+      "name": "Code: normalize input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        260
+      ]
+    },
+    {
+      "parameters": {
         "propertyName": "action",
         "rules": [
           {
@@ -28,6 +41,10 @@
           {
             "operation": "equal",
             "value": "status"
+          },
+          {
+            "operation": "equal",
+            "value": "notify"
           }
         ]
       },
@@ -116,6 +133,52 @@
     },
     {
       "parameters": {
+        "jsCode": "const b = ($json && typeof $json === 'object' && $json.body && typeof $json.body === 'object') ? $json.body : $json;\nconst expected = ($env.KOC_N8N_BEARER_TOKEN || '').trim();\nif (expected) {\n  const h = ($json && $json.headers && typeof $json.headers === 'object') ? $json.headers : {};\n  const auth = String((h.authorization || $headers.authorization || '')).trim();\n  if (auth !== `Bearer ${expected}`) {\n    throw new Error('unauthorized');\n  }\n}\n\nconst title = String(b.title || 'K8S AI Agent').trim();\nlet body = String(b.body || '').trim();\nif (body.length > 800) body = body.slice(0, 800) + '…';\n\nreturn [{ json: { title, body } }];"
+      },
+      "id": "Code_Notify_Normalize",
+      "name": "Code: normalize notify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.telegram.org/bot{{$env.KOC_TELEGRAM_BOT_TOKEN}}/sendMessage",
+        "method": "POST",
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={\n  \"chat_id\": $env.KOC_TELEGRAM_CHAT_ID,\n  \"parse_mode\": \"HTML\",\n  \"disable_web_page_preview\": true,\n  \"text\": `<b>${$json.title}</b>\\n${$json.body}`\n}"
+      },
+      "id": "HTTP_Telegram_Notify",
+      "name": "Notify: Telegram (notify)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        920,
+        520
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"ok\": true}",
+        "options": {}
+      },
+      "id": "Respond_Notify",
+      "name": "Respond: notify",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1140,
+        520
+      ]
+    },
+    {
+      "parameters": {
         "path": "koc-approval-decision",
         "httpMethod": "GET",
         "responseMode": "responseNode",
@@ -164,6 +227,17 @@
       "main": [
         [
           {
+            "node": "Code: normalize input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: normalize input": {
+      "main": [
+        [
+          {
             "node": "Switch: action",
             "type": "main",
             "index": 0
@@ -183,6 +257,13 @@
         [
           {
             "node": "Code: read status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code: normalize notify",
             "type": "main",
             "index": 0
           }
@@ -216,6 +297,28 @@
         [
           {
             "node": "Respond: status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code: normalize notify": {
+      "main": [
+        [
+          {
+            "node": "Notify: Telegram (notify)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify: Telegram (notify)": {
+      "main": [
+        [
+          {
+            "node": "Respond: notify",
             "type": "main",
             "index": 0
           }
