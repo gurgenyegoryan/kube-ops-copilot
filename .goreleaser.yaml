@@ -1,0 +1,60 @@
+project_name: kube-ops-copilot
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: kube-ops-copilot
+    main: ./cmd/kube-ops-copilot
+    binary: kube-ops-copilot
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/gurgenyegoryan/kube-ops-copilot/internal/cli.Version={{.Version}}
+      - -X github.com/gurgenyegoryan/kube-ops-copilot/internal/cli.Commit={{.Commit}}
+      - -X github.com/gurgenyegoryan/kube-ops-copilot/internal/cli.Date={{.Date}}
+
+archives:
+  - id: default
+    format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+
+sboms:
+  - artifacts: archive
+
+signs:
+  # Sign the checksums file using cosign keyless in the release workflow.
+  - id: checksums
+    artifacts: checksum
+    cmd: cosign
+    args:
+      - sign-blob
+      - --yes
+      - --output-signature
+      - ${signature}
+      - --output-certificate
+      - ${certificate}
+      - ${artifact}
+
+release:
+  draft: false
+  prerelease: auto
