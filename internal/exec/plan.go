@@ -11,6 +11,7 @@ type OperationType string
 
 const (
 	OpRolloutRestartDeployment OperationType = "rollout_restart_deployment"
+	OpScaleDeployment          OperationType = "scale_deployment"
 )
 
 type Plan struct {
@@ -26,6 +27,7 @@ type Operation struct {
 	Type      OperationType `json:"type"`
 	Namespace string        `json:"namespace"`
 	Name      string        `json:"name"`
+	Replicas  *int32        `json:"replicas,omitempty"`
 	Reason    string        `json:"reason,omitempty"`
 }
 
@@ -63,6 +65,14 @@ func (p Plan) Validate() error {
 	}
 	switch p.Operation.Type {
 	case OpRolloutRestartDeployment:
+		return nil
+	case OpScaleDeployment:
+		if p.Operation.Replicas == nil {
+			return fmt.Errorf("plan.operation.replicas is required for %s", OpScaleDeployment)
+		}
+		if *p.Operation.Replicas < 0 {
+			return fmt.Errorf("plan.operation.replicas must be >= 0")
+		}
 		return nil
 	default:
 		return fmt.Errorf("unsupported operation type: %q", p.Operation.Type)

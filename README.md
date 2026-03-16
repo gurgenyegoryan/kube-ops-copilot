@@ -48,9 +48,35 @@ docker pull ghcr.io/<org>/<repo>:vX.Y.Z
 
 `suggest` runs the same deterministic diagnosis pipeline, then asks an LLM for a human-friendly summary and safe next steps.
 
+If you pass `--plan-out`, it also asks the LLM for exactly one best executable remediation plan (when safe), and writes it as an `ExecutionPlan` JSON you can approve + execute.
+
 ```bash
 export OPENAI_API_KEY=... # or KUBE_OPS_COPILOT_OPENAI_API_KEY
 ./kube-ops-copilot suggest --llm-provider openai --llm-model gpt-4.1-mini --kubeconfig ~/.kube/config --context prod
+```
+
+Emit a plan file (if a safe executable plan is available):
+
+```bash
+./kube-ops-copilot suggest --llm-provider openai --llm-model gpt-4.1-mini \
+	--kubeconfig ~/.kube/config --context prod \
+	--plan-out /tmp/kube-ops-copilot-plan.json
+```
+
+### 2b) (Recommended) One-command remediation (Telegram approval)
+
+This runs: diagnose → LLM proposes exactly one best executable plan → sends approval → waits → applies after approval.
+
+```bash
+export OPENAI_API_KEY=...
+export KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN='...'
+export KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID='...'
+
+./kube-ops-copilot remediate --llm-provider openai --llm-model gpt-4.1-mini \
+	--kubeconfig ~/.kube/config --context prod \
+	--approval-provider telegram \
+	--wait-approval \
+	--apply
 ```
 
 ### 3) Execute an approved plan (safe-by-default)
@@ -142,7 +168,7 @@ Contract (HTTP POST JSON):
 - Request:
 
 ```json
-{"action":"request","approvalId":"...","summary":"...","operation":"...","target":"...","planPath":"..."}
+{"action":"request","approvalId":"...","summary":"...","details":"...","operation":"...","target":"...","planPath":"..."}
 ```
 
 - Status:
@@ -163,6 +189,18 @@ End-to-end:
 ./kube-ops-copilot approval request --provider n8n --plan examples/execute-restart-deployment.json --write-plan
 ./kube-ops-copilot execute --plan examples/execute-restart-deployment.json --approval-provider n8n --approval-id <approval-id> --approve --dry-run=false --wait-approval
 ```
+
+Recommended: use an n8n workflow that sends an approval message with **Approve/Deny buttons** which hit a second n8n webhook to record the decision. A ready-to-import example is provided at:
+
+- [examples/n8n-approval-workflow.json](examples/n8n-approval-workflow.json)
+
+That workflow expects these n8n environment variables:
+
+- `KOC_PUBLIC_BASE_URL` (public base URL of your n8n instance, e.g. `https://n8n.example.com`)
+- `KOC_DECISION_SECRET` (shared secret added to approve/deny button URLs)
+- Optional: `KOC_N8N_BEARER_TOKEN` (must match `KUBE_OPS_COPILOT_N8N_BEARER_TOKEN` if you set it)
+- Optional: `KOC_TELEGRAM_BOT_TOKEN`, `KOC_TELEGRAM_CHAT_ID` (to send Telegram button messages)
+- Optional: `KOC_SLACK_WEBHOOK_URL` (to send Slack button messages)
 
 ### Provider: Telegram (reply-based)
 

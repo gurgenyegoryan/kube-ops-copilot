@@ -2,6 +2,7 @@
   "apiVersion": "kube-ops-copilot/v1alpha1",
   "kind": "ExecutionPlan",
   "createdAt": "2026-03-16T00:00:00Z",
+  "approvalId": "753a8ac8-99c1-45e3-beb6-c900cd74daa4",
   "operation": {
     "type": "rollout_restart_deployment",
     "namespace": "default",

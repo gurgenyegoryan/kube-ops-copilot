@@ -23,6 +23,7 @@ type n8nPayload struct {
 	Action     string `json:"action"`
 	ApprovalID string `json:"approvalId"`
 	Summary    string `json:"summary,omitempty"`
+	Details    string `json:"details,omitempty"`
 	Operation  string `json:"operation,omitempty"`
 	Target     string `json:"target,omitempty"`
 	PlanPath   string `json:"planPath,omitempty"`
@@ -40,7 +41,7 @@ func (n N8N) Request(ctx context.Context, req Request) (string, error) {
 	if strings.TrimSpace(n.WebhookURL) == "" {
 		return "", fmt.Errorf("n8n webhook url is required (set KUBE_OPS_COPILOT_N8N_WEBHOOK_URL)")
 	}
-	payload := n8nPayload{Action: "request", ApprovalID: req.ApprovalID, Summary: req.Summary, Operation: req.Operation, Target: req.Target, PlanPath: req.PlanPath}
+	payload := n8nPayload{Action: "request", ApprovalID: req.ApprovalID, Summary: req.Summary, Details: req.Details, Operation: req.Operation, Target: req.Target, PlanPath: req.PlanPath}
 	resp, err := n.call(ctx, payload)
 	if err != nil {
 		return "", err

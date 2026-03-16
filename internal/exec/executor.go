@@ -48,6 +48,25 @@ func (e *Executor) Apply(ctx context.Context, plan Plan) (Result, error) {
 			EndedAt:   time.Now(),
 			Verified:  verified,
 		}, nil
+	case OpScaleDeployment:
+		replicas := int32(0)
+		if plan.Operation.Replicas != nil {
+			replicas = *plan.Operation.Replicas
+		}
+		if err := e.scaleDeployment(ctx, plan.Operation.Namespace, plan.Operation.Name, replicas); err != nil {
+			return Result{}, err
+		}
+		verified, err := e.verifyDeploymentRollout(ctx, plan.Operation.Namespace, plan.Operation.Name, plan.Verify.TimeoutSeconds)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{
+			Operation: plan.Operation.Type,
+			Target:    fmt.Sprintf("deployment/%s/%s", plan.Operation.Namespace, plan.Operation.Name),
+			StartedAt: started,
+			EndedAt:   time.Now(),
+			Verified:  verified,
+		}, nil
 	default:
 		return Result{}, fmt.Errorf("unsupported operation type: %q", plan.Operation.Type)
 	}
@@ -59,6 +78,15 @@ func (e *Executor) rolloutRestartDeployment(ctx context.Context, namespace, name
 	_, err := e.Client.AppsV1().Deployments(namespace).Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
 		return fmt.Errorf("patch deployment for restart: %w", err)
+	}
+	return nil
+}
+
+func (e *Executor) scaleDeployment(ctx context.Context, namespace, name string, replicas int32) error {
+	patch := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas))
+	_, err := e.Client.AppsV1().Deployments(namespace).Patch(ctx, name, types.StrategicMergePatchType, patch, metav1.PatchOptions{})
+	if err != nil {
+		return fmt.Errorf("patch deployment replicas: %w", err)
 	}
 	return nil
 }

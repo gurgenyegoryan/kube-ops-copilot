@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,8 +28,26 @@ func (t Telegram) Request(ctx context.Context, req Request) (string, error) {
 	if strings.TrimSpace(t.Token) == "" || strings.TrimSpace(t.ChatID) == "" {
 		return "", fmt.Errorf("telegram token/chat id required (set KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN and KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID)")
 	}
-	msg := fmt.Sprintf("Approval requested: %s\n\nOperation: %s\nTarget: %s\n\nTo approve: reply with `approve %s`\nTo deny: reply with `deny %s`", req.Summary, req.Operation, req.Target, req.ApprovalID, req.ApprovalID)
-	if err := telegramSend(ctx, t.http(), t.Token, t.ChatID, msg); err != nil {
+	details := strings.TrimSpace(req.Details)
+	if len(details) > 2800 {
+		details = details[:2800] + "\n…(truncated)"
+	}
+	msg := "<b>K8S AI Agent</b>\n" +
+		"Approval requested: <code>" + escapeHTML(req.ApprovalID) + "</code>\n\n" +
+		"<b>Proposed change</b>\n" +
+		"Operation: <code>" + escapeHTML(req.Operation) + "</code>\n" +
+		"Target: <code>" + escapeHTML(req.Target) + "</code>\n"
+	if strings.TrimSpace(req.Summary) != "" {
+		msg += "Summary: " + escapeHTML(req.Summary) + "\n"
+	}
+	if details != "" {
+		msg += "\n<b>Why this is recommended</b>\n" + escapeHTML(details) + "\n"
+	}
+	msg += "\n<b>Approve / Deny</b>\n" +
+		"To approve: reply with <code>approve " + escapeHTML(req.ApprovalID) + "</code>\n" +
+		"To deny: reply with <code>deny " + escapeHTML(req.ApprovalID) + "</code>\n"
+
+	if err := telegramSendHTML(ctx, t.http(), t.Token, t.ChatID, msg); err != nil {
 		return "", err
 	}
 	return req.ApprovalID, nil
@@ -49,14 +68,27 @@ func (t Telegram) Status(ctx context.Context, approvalID string) (Status, error)
 	needleApprove := "approve " + approvalID
 	needleDeny := "deny " + approvalID
 
+	chatIDStr := strings.TrimSpace(t.ChatID)
+	var wantChatID *int64
+	if v, err := strconv.ParseInt(chatIDStr, 10, 64); err == nil {
+		wantChatID = &v
+	}
+
 	// Scan newest first
 	for i := len(updates) - 1; i >= 0; i-- {
 		u := updates[i]
 		if u.Message == nil {
 			continue
 		}
-		if fmt.Sprintf("%v", u.Message.Chat.ID) != t.ChatID {
-			continue
+		if wantChatID != nil {
+			if u.Message.Chat.ID != *wantChatID {
+				continue
+			}
+		} else {
+			// Fall back to string compare if user provided non-numeric chat id.
+			if fmt.Sprintf("%d", u.Message.Chat.ID) != chatIDStr {
+				continue
+			}
 		}
 		text := strings.ToLower(strings.TrimSpace(u.Message.Text))
 		switch {
@@ -86,7 +118,7 @@ type telegramUpdates struct {
 				Username string `json:"username"`
 			} `json:"from"`
 			Chat struct {
-				ID any `json:"id"`
+				ID int64 `json:"id"`
 			} `json:"chat"`
 			Text string `json:"text"`
 		} `json:"message"`
@@ -102,7 +134,7 @@ type telegramMessage struct {
 		Username string
 	}
 	Chat struct {
-		ID any
+		ID int64
 	}
 	Text string
 }
@@ -142,9 +174,9 @@ func telegramGetUpdates(ctx context.Context, hc *http.Client, token string) ([]t
 	return out, nil
 }
 
-func telegramSend(ctx context.Context, hc *http.Client, token, chatID, text string) error {
+func telegramSendHTML(ctx context.Context, hc *http.Client, token, chatID, html string) error {
 	endpoint := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", url.PathEscape(token))
-	payload := map[string]any{"chat_id": chatID, "text": text, "disable_web_page_preview": true}
+	payload := map[string]any{"chat_id": chatID, "text": html, "parse_mode": "HTML", "disable_web_page_preview": true}
 	b, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -164,4 +196,11 @@ func telegramSend(ctx context.Context, hc *http.Client, token, chatID, text stri
 		return fmt.Errorf("telegram http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
+}
+
+func escapeHTML(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	return s
 }

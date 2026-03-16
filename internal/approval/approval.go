@@ -25,6 +25,7 @@ const (
 type Request struct {
 	ApprovalID string
 	Summary    string
+	Details    string
 	PlanPath   string
 	Operation  string
 	Target     string

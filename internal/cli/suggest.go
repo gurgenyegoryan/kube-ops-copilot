@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ type suggestFlags struct {
 	Timeout                 time.Duration
 	EventsSince             time.Duration
 	IncludeSystemNamespaces bool
+	PlanOut                 string
 
 	Provider    string
 	Model       string
@@ -82,15 +84,48 @@ func NewSuggestCmd() *cobra.Command {
 
 			system := strings.TrimSpace(`You are Kube Ops Copilot, an approval-driven Kubernetes SRE assistant.
 You must be evidence-first. Use the report as truth; do not invent cluster facts.
-You must never suggest executing changes without operator approval.
+You must never apply changes.
 When you propose kubectl commands, keep them read-only by default.
-Output concise Markdown.`)
 
-			user := fmt.Sprintf("Here is the deterministic diagnosis report as JSON:\n\n%s\n\nTask: Provide triage order, likely root causes, and next read-only verification commands. If you suggest remediation, describe it as an approval-gated plan (do not apply).", string(repJSON))
+If asked to propose a remediation, propose ONLY one best remediation for the current evidence.
+If the remediation is executable by this tool, include EXACTLY ONE JSON ExecutionPlan in a fenced code block.
+Allowed operation types:
+- rollout_restart_deployment
+- scale_deployment
+
+If no safe executable plan can be proposed from the evidence, output a JSON fenced block with: null
+Output professional, concise Markdown.`)
+
+			user := fmt.Sprintf("Here is the deterministic diagnosis report as JSON:\n\n%s\n\nTask:\n1) Provide triage order, likely root causes, and next read-only verification commands.\n2) Provide the single best production remediation (if any).\n\nOutput format requirements:\n- First, Markdown.\n- Then a fenced code block: ```json ...``` containing either an ExecutionPlan object or null.\n\nExecutionPlan JSON schema (must match exactly):\n{\n  \"apiVersion\": \"kube-ops-copilot/v1alpha1\",\n  \"kind\": \"ExecutionPlan\",\n  \"createdAt\": \"RFC3339\",\n  \"approvalId\": \"\",\n  \"operation\": {\n    \"type\": \"rollout_restart_deployment|scale_deployment\",\n    \"namespace\": \"...\",\n    \"name\": \"...\",\n    \"replicas\": 3,\n    \"reason\": \"...\"\n  },\n  \"verify\": { \"timeoutSeconds\": 180 }\n}\n\nNotes:\n- For rollout_restart_deployment, omit replicas.\n- For scale_deployment, replicas is required.\n- approvalId must be empty string.\n", string(repJSON))
 			resp, err := client.Complete(ctx, llm.Request{System: system, User: user, Model: f.Model, Temperature: f.Temperature})
 			if err != nil {
 				return err
 			}
+
+			if strings.TrimSpace(f.PlanOut) != "" {
+				p, err := extractAndValidatePlan(resp.Text)
+				if err != nil {
+					return err
+				}
+				if p != nil {
+					b, err := json.MarshalIndent(p, "", "  ")
+					if err != nil {
+						return err
+					}
+					if err := os.WriteFile(f.PlanOut, b, 0o600); err != nil {
+						return err
+					}
+				}
+				text := stripJSONPlanBlock(resp.Text)
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSpace(text))
+				if p == nil {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\n(no executable plan emitted)\n")
+				} else {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\n(wrote executable plan to %s)\n", f.PlanOut)
+				}
+				return nil
+			}
+
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSpace(resp.Text))
 			return nil
 		},
@@ -101,6 +136,7 @@ Output concise Markdown.`)
 	cmd.Flags().DurationVar(&f.Timeout, "timeout", 60*time.Second, "Overall suggest timeout")
 	cmd.Flags().DurationVar(&f.EventsSince, "events-since", 60*time.Minute, "How far back to analyze Warning events")
 	cmd.Flags().BoolVar(&f.IncludeSystemNamespaces, "include-system-namespaces", false, "Include kube-system and other system namespaces in workload/resource/policy checks")
+	cmd.Flags().StringVar(&f.PlanOut, "plan-out", "", "Write an executable ExecutionPlan JSON (from LLM output) to this path")
 
 	cmd.Flags().StringVar(&f.Provider, "llm-provider", "", "LLM provider: openai|anthropic|ollama")
 	cmd.Flags().StringVar(&f.Model, "llm-model", "", "LLM model name (provider-specific)")

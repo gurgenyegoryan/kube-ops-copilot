@@ -53,20 +53,36 @@ func (s Slack) Request(ctx context.Context, req Request) (string, error) {
 
 	// If a webhook is configured, post an interactive message with approve/deny buttons.
 	if strings.TrimSpace(s.WebhookURL) != "" {
+		details := strings.TrimSpace(req.Details)
+		if len(details) > 2500 {
+			details = details[:2500] + "\n…(truncated)"
+		}
+
 		actionURL := strings.TrimRight(s.PublicBaseURL, "/") + "/slack/actions"
 		if strings.TrimSpace(s.PublicBaseURL) == "" {
 			actionURL = "(configure KUBE_OPS_COPILOT_PUBLIC_BASE_URL)/slack/actions"
 		}
+
+		blocks := []any{
+			map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": fmt.Sprintf("*Approval requested* `%s`\n*Operation:* %s\n*Target:* %s", req.ApprovalID, req.Operation, req.Target)}},
+		}
+		if strings.TrimSpace(req.Summary) != "" {
+			blocks = append(blocks, map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": fmt.Sprintf("*Summary:* %s", req.Summary)}})
+		}
+		if details != "" {
+			blocks = append(blocks, map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": fmt.Sprintf("*Why this is recommended:*\n%s", details)}})
+		}
+		blocks = append(blocks,
+			map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": fmt.Sprintf("Configure Slack Interactivity Request URL to: %s", actionURL)}},
+			map[string]any{"type": "actions", "elements": []any{
+				map[string]any{"type": "button", "text": map[string]any{"type": "plain_text", "text": "Approve"}, "style": "primary", "action_id": "koc_approve", "value": req.ApprovalID},
+				map[string]any{"type": "button", "text": map[string]any{"type": "plain_text", "text": "Deny"}, "style": "danger", "action_id": "koc_deny", "value": req.ApprovalID},
+			}},
+		)
+
 		payload := map[string]any{
 			"text": fmt.Sprintf("Approval requested: %s", req.Summary),
-			"blocks": []any{
-				map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": fmt.Sprintf("*Approval requested* `%s`\n*Operation:* %s\n*Target:* %s", req.ApprovalID, req.Operation, req.Target)}},
-				map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": fmt.Sprintf("Configure Slack Interactivity Request URL to: %s", actionURL)}},
-				map[string]any{"type": "actions", "elements": []any{
-					map[string]any{"type": "button", "text": map[string]any{"type": "plain_text", "text": "Approve"}, "style": "primary", "action_id": "koc_approve", "value": req.ApprovalID},
-					map[string]any{"type": "button", "text": map[string]any{"type": "plain_text", "text": "Deny"}, "style": "danger", "action_id": "koc_deny", "value": req.ApprovalID},
-				}},
-			},
+			"blocks": blocks,
 		}
 		if err := slackPostWebhook(ctx, s.http(), s.WebhookURL, payload); err != nil {
 			return "", err
