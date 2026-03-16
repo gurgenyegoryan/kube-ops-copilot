@@ -60,12 +60,13 @@ func newApprovalRequestCmd(parent *approvalFlags) *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), parent.Timeout)
 			defer cancel()
 
-			if strings.TrimSpace(rf.PlanPath) == "" {
-				return fmt.Errorf("missing --plan")
-			}
-			plan, err := exec.LoadPlan(rf.PlanPath)
+			planPath, err := resolvePlanPath(rf.PlanPath)
 			if err != nil {
-				return fmt.Errorf("load plan: %w", err)
+				return fmt.Errorf("load plan: %w (try --plan ./examples/execute-restart-deployment.json)", err)
+			}
+			plan, err := exec.LoadPlan(planPath)
+			if err != nil {
+				return fmt.Errorf("load plan: %w (path=%s)", err, planPath)
 			}
 			if err := plan.Validate(); err != nil {
 				return fmt.Errorf("invalid plan: %w", err)
@@ -91,7 +92,7 @@ func newApprovalRequestCmd(parent *approvalFlags) *cobra.Command {
 			id, err := ap.Request(ctx, approval.Request{
 				ApprovalID: approvalID,
 				Summary:    summary,
-				PlanPath:   rf.PlanPath,
+				PlanPath:   planPath,
 				Operation:  string(plan.Operation.Type),
 				Target:     fmt.Sprintf("%s/%s", plan.Operation.Namespace, plan.Operation.Name),
 			})
@@ -105,14 +106,14 @@ func newApprovalRequestCmd(parent *approvalFlags) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if err := os.WriteFile(rf.PlanPath, b, 0o600); err != nil {
+				if err := os.WriteFile(planPath, b, 0o600); err != nil {
 					return err
 				}
 			}
 
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "approval requested: provider=%s approval-id=%s\n", parent.Provider, id)
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "next: kube-ops-copilot approval status --provider %s --approval-id %s\n", parent.Provider, id)
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "then: kube-ops-copilot execute --plan %s --approval-provider %s --approval-id %s --approve\n", rf.PlanPath, parent.Provider, id)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "then: kube-ops-copilot execute --plan %s --approval-provider %s --approval-id %s --approve\n", planPath, parent.Provider, id)
 			return nil
 		},
 	}

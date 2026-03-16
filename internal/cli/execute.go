@@ -38,9 +38,13 @@ func NewExecuteCmd() *cobra.Command {
 			if f.PlanPath == "" {
 				return errors.New("refusing to execute: missing --plan")
 			}
-			plan, err := exec.LoadPlan(f.PlanPath)
+			planPath, err := resolvePlanPath(f.PlanPath)
 			if err != nil {
-				return fmt.Errorf("load plan: %w", err)
+				return fmt.Errorf("load plan: %w (try --plan ./examples/execute-restart-deployment.json)", err)
+			}
+			plan, err := exec.LoadPlan(planPath)
+			if err != nil {
+				return fmt.Errorf("load plan: %w (path=%s)", err, planPath)
 			}
 			if err := plan.Validate(); err != nil {
 				return fmt.Errorf("invalid plan: %w", err)
