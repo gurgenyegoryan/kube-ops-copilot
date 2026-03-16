@@ -45,6 +45,7 @@ type remediateFlags struct {
 	ApprovalID       string
 	WaitApproval     bool
 	ApprovalTimeout  time.Duration
+	ApprovalOnNull   bool
 
 	PlanOut string
 	Apply   bool
@@ -134,6 +135,58 @@ Output format requirements:
 
 			if plan == nil {
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\n(no executable plan proposed for this snapshot)")
+				if !f.ApprovalOnNull {
+					return nil
+				}
+
+				approvalProvider := strings.ToLower(strings.TrimSpace(f.ApprovalProvider))
+				if approvalProvider == "" {
+					approvalProvider = string(approval.ProviderManual)
+				}
+				approvalID := strings.TrimSpace(f.ApprovalID)
+				if approvalID == "" {
+					approvalID = uuid.NewString()
+				}
+
+				cfg := approval.FromEnv()
+				cfg.Provider = approval.Provider(approvalProvider)
+				ap, err := approval.New(cfg)
+				if err != nil {
+					return err
+				}
+
+				target := strings.TrimSpace(f.Context)
+				if target == "" {
+					target = "current-context"
+				}
+				details := strings.TrimSpace(md)
+				if len(details) > 900 {
+					details = strings.TrimSpace(details[:900]) + "…"
+				}
+
+				_, err = ap.Request(ctx, approval.Request{
+					ApprovalID: approvalID,
+					Summary:    "review triage (no executable plan)",
+					Operation:  "review_report",
+					Target:     target,
+					Details:    details,
+				})
+				if err != nil {
+					return err
+				}
+
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\napproval requested (no plan): provider=%s approval-id=%s\n", approvalProvider, approvalID)
+
+				if approvalProvider != string(approval.ProviderManual) {
+					if f.WaitApproval {
+						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "waiting for approval decision (timeout=%s)…\n", f.ApprovalTimeout)
+					}
+					if err := ensureApproved(cmd.Context(), approvalProvider, approvalID, f.WaitApproval, f.ApprovalTimeout); err != nil {
+						return err
+					}
+				}
+
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "approval recorded; nothing to apply because plan is null")
 				return nil
 			}
 
@@ -244,6 +297,7 @@ Output format requirements:
 	cmd.Flags().StringVar(&f.ApprovalID, "approval-id", "", "Optional approval id (generated if empty)")
 	cmd.Flags().BoolVar(&f.WaitApproval, "wait-approval", true, "Wait/poll for approval decision")
 	cmd.Flags().DurationVar(&f.ApprovalTimeout, "approval-timeout", 10*time.Minute, "How long to wait for approval when --wait-approval is set")
+	cmd.Flags().BoolVar(&f.ApprovalOnNull, "approval-on-null", false, "Request approval even if the LLM returns a null plan (useful for review/ack workflows)")
 
 	cmd.Flags().StringVar(&f.PlanOut, "plan-out", "", "Where to write the generated plan JSON (defaults to a temp file)")
 	cmd.Flags().BoolVar(&f.Apply, "apply", false, "Apply the plan after approval")

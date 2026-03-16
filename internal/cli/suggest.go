@@ -19,6 +19,7 @@ import (
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/engine"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/kube"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/llm"
+	"github.com/gurgenyegoryan/kube-ops-copilot/internal/notify"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/report"
 	"github.com/spf13/cobra"
 )
@@ -30,6 +31,7 @@ type suggestFlags struct {
 	EventsSince             time.Duration
 	IncludeSystemNamespaces bool
 	PlanOut                 string
+	Notify                  bool
 
 	Provider    string
 	Model       string
@@ -119,16 +121,38 @@ Output professional, concise Markdown.`)
 					}
 				}
 				text := stripJSONPlanBlock(resp.Text)
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSpace(text))
+				text = strings.TrimSpace(text)
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), text)
 				if p == nil {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\n(no executable plan emitted)\n")
 				} else {
 					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\n(wrote executable plan to %s)\n", f.PlanOut)
 				}
+
+				if f.Notify {
+					n := notify.NewFromConfig(notify.FromEnv())
+					if n == nil {
+						return fmt.Errorf("--notify set but no notifier configured; set KUBE_OPS_COPILOT_N8N_WEBHOOK_URL and/or KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL and/or KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN + KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID")
+					}
+					body := truncateForTelegram(text, 3500)
+					if p != nil {
+						body = strings.TrimSpace(body + "\n\nplan: " + strings.TrimSpace(f.PlanOut))
+					}
+					_ = n.Send(ctx, notify.Message{Title: "kube-ops-copilot suggest", Body: body})
+				}
 				return nil
 			}
 
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSpace(resp.Text))
+			out := strings.TrimSpace(resp.Text)
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), out)
+			if f.Notify {
+				n := notify.NewFromConfig(notify.FromEnv())
+				if n == nil {
+					return fmt.Errorf("--notify set but no notifier configured; set KUBE_OPS_COPILOT_N8N_WEBHOOK_URL and/or KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL and/or KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN + KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID")
+				}
+				text := strings.TrimSpace(stripJSONPlanBlock(out))
+				_ = n.Send(ctx, notify.Message{Title: "kube-ops-copilot suggest", Body: truncateForTelegram(text, 3500)})
+			}
 			return nil
 		},
 	}
@@ -139,6 +163,7 @@ Output professional, concise Markdown.`)
 	cmd.Flags().DurationVar(&f.EventsSince, "events-since", 60*time.Minute, "How far back to analyze Warning events")
 	cmd.Flags().BoolVar(&f.IncludeSystemNamespaces, "include-system-namespaces", false, "Include kube-system and other system namespaces in workload/resource/policy checks")
 	cmd.Flags().StringVar(&f.PlanOut, "plan-out", "", "Write an executable ExecutionPlan JSON (from LLM output) to this path")
+	cmd.Flags().BoolVar(&f.Notify, "notify", false, "Send a notification (via n8n/Slack/Telegram env vars)")
 
 	cmd.Flags().StringVar(&f.Provider, "llm-provider", "", "LLM provider: openai|anthropic|ollama")
 	cmd.Flags().StringVar(&f.Model, "llm-model", "", "LLM model name (provider-specific)")
@@ -147,4 +172,17 @@ Output professional, concise Markdown.`)
 	cmd.Flags().Float64Var(&f.Temperature, "llm-temperature", 0, "LLM temperature (optional)")
 
 	return cmd
+}
+
+func truncateForTelegram(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	// Keep it simple and safe for multi-byte UTF-8: truncate by runes.
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return strings.TrimSpace(string(r[:max])) + "…"
 }
