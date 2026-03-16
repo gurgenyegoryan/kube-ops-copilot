@@ -37,10 +37,10 @@ func (m Multi) Send(ctx context.Context, msg Message) error {
 }
 
 type Config struct {
-	SlackWebhookURL   string
-	TelegramBotToken  string
-	TelegramChatID    string
-	DefaultTitle      string
+	SlackWebhookURL  string
+	TelegramBotToken string
+	TelegramChatID   string
+	DefaultTitle     string
 }
 
 func FromEnv() Config {

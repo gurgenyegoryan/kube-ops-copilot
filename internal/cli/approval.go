@@ -31,8 +31,8 @@ type approvalStatusFlags struct {
 }
 
 type approvalServeFlags struct {
-	ListenAddr string
-	StorePath  string
+	ListenAddr    string
+	StorePath     string
 	PublicBaseURL string
 }
 

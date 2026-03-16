@@ -9,8 +9,8 @@ import (
 type Config struct {
 	Provider Provider
 
-	N8NWebhookURL   string
-	N8NBearerToken  string
+	N8NWebhookURL  string
+	N8NBearerToken string
 
 	TelegramBotToken string
 	TelegramChatID   string
@@ -21,8 +21,8 @@ type Config struct {
 	SlackChannelID     string
 	SlackBaseURL       string
 
-	StorePath string
-	ListenAddr string
+	StorePath     string
+	ListenAddr    string
 	PublicBaseURL string
 }
 
@@ -48,8 +48,8 @@ func FromEnv() Config {
 		SlackChannelID:     get("KUBE_OPS_COPILOT_SLACK_CHANNEL_ID"),
 		SlackBaseURL:       get("KUBE_OPS_COPILOT_SLACK_BASE_URL"),
 
-		StorePath:    get("KUBE_OPS_COPILOT_APPROVAL_STORE"),
-		ListenAddr:   get("KUBE_OPS_COPILOT_APPROVAL_LISTEN", "APPROVAL_LISTEN"),
+		StorePath:     get("KUBE_OPS_COPILOT_APPROVAL_STORE"),
+		ListenAddr:    get("KUBE_OPS_COPILOT_APPROVAL_LISTEN", "APPROVAL_LISTEN"),
 		PublicBaseURL: get("KUBE_OPS_COPILOT_PUBLIC_BASE_URL"),
 	}
 }

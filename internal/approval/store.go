@@ -17,11 +17,11 @@ type Record struct {
 	Operation string `json:"operation"`
 	Target    string `json:"target"`
 
-	Decision   Decision  `json:"decision"`
-	DecidedAt  time.Time `json:"decidedAt,omitempty"`
-	DecidedBy  string    `json:"decidedBy,omitempty"`
-	Reason     string    `json:"reason,omitempty"`
-	Raw        string    `json:"raw,omitempty"`
+	Decision  Decision  `json:"decision"`
+	DecidedAt time.Time `json:"decidedAt,omitempty"`
+	DecidedBy string    `json:"decidedBy,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
+	Raw       string    `json:"raw,omitempty"`
 }
 
 type storeFile struct {

@@ -13,9 +13,9 @@ import (
 )
 
 type Telegram struct {
-	Token string
+	Token  string
 	ChatID string
-	HTTP  *http.Client
+	HTTP   *http.Client
 }
 
 func (t Telegram) Provider() Provider { return ProviderTelegram }

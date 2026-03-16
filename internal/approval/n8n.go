@@ -12,9 +12,9 @@ import (
 )
 
 type N8N struct {
-	WebhookURL   string
-	BearerToken  string
-	HTTP         *http.Client
+	WebhookURL  string
+	BearerToken string
+	HTTP        *http.Client
 }
 
 func (n N8N) Provider() Provider { return ProviderN8N }

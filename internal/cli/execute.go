@@ -15,17 +15,17 @@ import (
 )
 
 type executeFlags struct {
-	PlanPath   string
-	Kubeconfig string
-	Context    string
-	ApprovalID string
+	PlanPath         string
+	Kubeconfig       string
+	Context          string
+	ApprovalID       string
 	ApprovalProvider string
-	Approve    bool
-	WaitApproval bool
-	ApprovalTimeout time.Duration
-	DryRun     bool
-	Timeout    time.Duration
-	Notify     bool
+	Approve          bool
+	WaitApproval     bool
+	ApprovalTimeout  time.Duration
+	DryRun           bool
+	Timeout          time.Duration
+	Notify           bool
 }
 
 func NewExecuteCmd() *cobra.Command {

@@ -13,9 +13,9 @@ import (
 )
 
 type TelegramBot struct {
-	Token string
+	Token  string
 	ChatID string
-	HTTP  *http.Client
+	HTTP   *http.Client
 }
 
 func (t TelegramBot) Send(ctx context.Context, msg Message) error {

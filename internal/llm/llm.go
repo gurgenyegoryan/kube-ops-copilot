@@ -7,10 +7,10 @@ import (
 type Provider string
 
 const (
-	ProviderNone     Provider = "none"
-	ProviderOpenAI   Provider = "openai"
+	ProviderNone      Provider = "none"
+	ProviderOpenAI    Provider = "openai"
 	ProviderAnthropic Provider = "anthropic"
-	ProviderOllama   Provider = "ollama"
+	ProviderOllama    Provider = "ollama"
 )
 
 type Client interface {
