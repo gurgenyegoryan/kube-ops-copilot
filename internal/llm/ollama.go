@@ -50,7 +50,7 @@ func (c *OllamaClient) Complete(ctx context.Context, req Request) (Response, err
 	if err != nil {
 		return Response{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return Response{}, fmt.Errorf("ollama http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))

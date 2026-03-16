@@ -93,7 +93,7 @@ func (n N8N) call(ctx context.Context, payload n8nPayload) (n8nResponse, error) 
 	if err != nil {
 		return n8nResponse{}, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return n8nResponse{}, fmt.Errorf("n8n http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))

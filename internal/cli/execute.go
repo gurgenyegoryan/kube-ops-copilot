@@ -67,8 +67,8 @@ func NewExecuteCmd() *cobra.Command {
 			}
 
 			if f.DryRun {
-				fmt.Fprintf(cmd.OutOrStdout(), "dry-run: no changes executed; approval validated (approval-id=%s)\n", f.ApprovalID)
-				fmt.Fprintf(cmd.OutOrStdout(), "plan: op=%s target=%s/%s approval-provider=%s\n", plan.Operation.Type, plan.Operation.Namespace, plan.Operation.Name, provider)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "dry-run: no changes executed; approval validated (approval-id=%s)\n", f.ApprovalID)
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "plan: op=%s target=%s/%s approval-provider=%s\n", plan.Operation.Type, plan.Operation.Namespace, plan.Operation.Name, provider)
 				if f.Notify {
 					n := notify.NewFromConfig(notify.FromEnv())
 					if n == nil {
@@ -91,7 +91,7 @@ func NewExecuteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "executed: op=%s target=%s verified=%t duration=%s\n", result.Operation, result.Target, result.Verified, result.EndedAt.Sub(result.StartedAt))
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "executed: op=%s target=%s verified=%t duration=%s\n", result.Operation, result.Target, result.Verified, result.EndedAt.Sub(result.StartedAt))
 			if f.Notify {
 				n := notify.NewFromConfig(notify.FromEnv())
 				if n == nil {

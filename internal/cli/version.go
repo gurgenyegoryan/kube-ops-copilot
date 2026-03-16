@@ -17,7 +17,7 @@ func NewVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print version information",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Fprintf(cmd.OutOrStdout(), "kube-ops-copilot %s (commit=%s date=%s)\n", Version, Commit, Date)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "kube-ops-copilot %s (commit=%s date=%s)\n", Version, Commit, Date)
 			return nil
 		},
 	}

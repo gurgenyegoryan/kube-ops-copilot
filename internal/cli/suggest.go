@@ -91,7 +91,7 @@ Output concise Markdown.`)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSpace(resp.Text))
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), strings.TrimSpace(resp.Text))
 			return nil
 		},
 	}

@@ -18,7 +18,7 @@ func TestExecuteRefusesWithoutApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("temp file: %v", err)
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 
 	_, _ = f.WriteString(`{"apiVersion":"kube-ops-copilot/v1alpha1","kind":"ExecutionPlan","createdAt":"2026-03-16T00:00:00Z","operation":{"type":"rollout_restart_deployment","namespace":"default","name":"x"},"verify":{"timeoutSeconds":1}}`)
 	_ = f.Close()

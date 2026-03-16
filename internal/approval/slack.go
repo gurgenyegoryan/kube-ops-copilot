@@ -115,7 +115,7 @@ func slackPostWebhook(ctx context.Context, hc *http.Client, webhookURL string, p
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("slack webhook http %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
@@ -140,7 +140,7 @@ func (s Slack) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := io.ReadAll(r.Body)
-	r.Body.Close()
+	_ = r.Body.Close()
 
 	if !verifySlackSignature(s.SigningSecret, r.Header.Get("X-Slack-Request-Timestamp"), r.Header.Get("X-Slack-Signature"), body) {
 		w.WriteHeader(http.StatusUnauthorized)

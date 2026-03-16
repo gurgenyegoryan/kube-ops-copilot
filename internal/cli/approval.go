@@ -110,9 +110,9 @@ func newApprovalRequestCmd(parent *approvalFlags) *cobra.Command {
 				}
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "approval requested: provider=%s approval-id=%s\n", parent.Provider, id)
-			fmt.Fprintf(cmd.OutOrStdout(), "next: kube-ops-copilot approval status --provider %s --approval-id %s\n", parent.Provider, id)
-			fmt.Fprintf(cmd.OutOrStdout(), "then: kube-ops-copilot execute --plan %s --approval-provider %s --approval-id %s --approve\n", rf.PlanPath, parent.Provider, id)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "approval requested: provider=%s approval-id=%s\n", parent.Provider, id)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "next: kube-ops-copilot approval status --provider %s --approval-id %s\n", parent.Provider, id)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "then: kube-ops-copilot execute --plan %s --approval-provider %s --approval-id %s --approve\n", rf.PlanPath, parent.Provider, id)
 			return nil
 		},
 	}
@@ -145,7 +145,7 @@ func newApprovalStatusCmd(parent *approvalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "approval status: provider=%s approval-id=%s decision=%s approver=%s reason=%s\n", parent.Provider, sf.ApprovalID, st.Decision, st.Approver, st.Reason)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "approval status: provider=%s approval-id=%s decision=%s approver=%s reason=%s\n", parent.Provider, sf.ApprovalID, st.Decision, st.Approver, st.Reason)
 			return nil
 		},
 	}
@@ -188,7 +188,7 @@ func newApprovalServeCmd(parent *approvalFlags) *cobra.Command {
 			}
 
 			srv := newApprovalHTTPServer(addr, slack)
-			fmt.Fprintf(cmd.OutOrStdout(), "approval server listening on %s (endpoint: /slack/actions)\n", addr)
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "approval server listening on %s (endpoint: /slack/actions)\n", addr)
 			return srv.ListenAndServe()
 		},
 	}
