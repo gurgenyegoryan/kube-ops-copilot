@@ -32,19 +32,24 @@
     },
     {
       "parameters": {
+        "dataType": "string",
         "propertyName": "action",
+        "value1": "={{$json.action}}",
         "rules": [
           {
             "operation": "equal",
-            "value": "request"
+            "value": "request",
+            "value2": "request"
           },
           {
             "operation": "equal",
-            "value": "status"
+            "value": "status",
+            "value2": "status"
           },
           {
             "operation": "equal",
-            "value": "notify"
+            "value": "notify",
+            "value2": "notify"
           }
         ]
       },

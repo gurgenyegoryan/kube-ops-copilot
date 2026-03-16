@@ -81,7 +81,7 @@ func (s Slack) Request(ctx context.Context, req Request) (string, error) {
 		)
 
 		payload := map[string]any{
-			"text": fmt.Sprintf("Approval requested: %s", req.Summary),
+			"text":   fmt.Sprintf("Approval requested: %s", req.Summary),
 			"blocks": blocks,
 		}
 		if err := slackPostWebhook(ctx, s.http(), s.WebhookURL, payload); err != nil {
