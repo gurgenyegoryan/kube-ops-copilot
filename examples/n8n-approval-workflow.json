@@ -1,351 +1,848 @@
 {
-  "name": "kube-ops-copilot approvals (n8n → Telegram buttons)",
   "nodes": [
     {
       "parameters": {
-        "path": "koc-approval",
         "httpMethod": "POST",
+        "path": "koc-approval",
         "responseMode": "responseNode",
         "options": {}
       },
-      "id": "Webhook_Approval",
-      "name": "Webhook: Approval API",
       "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
+      "typeVersion": 2.1,
       "position": [
-        200,
-        260
-      ]
+        0,
+        64
+      ],
+      "id": "98ccf50f-e6bb-4909-bd38-0524be579201",
+      "name": "Webhook",
+      "webhookId": "6156bc45-1b1b-4c42-b371-1eeebdb23156"
     },
     {
       "parameters": {
-        "jsCode": "// Normalize input so downstream nodes can reliably read `action` at the root.\n// n8n may put the request JSON under `$json.body` depending on version/settings.\nconst body = ($json && typeof $json === 'object' && $json.body && typeof $json.body === 'object') ? $json.body : $json;\nconst action = String(body.action || '').trim();\n\n// Preserve headers/query too (useful for auth/diagnostics).\nconst headers = ($json && $json.headers && typeof $json.headers === 'object') ? $json.headers : {};\nconst query = ($json && $json.query && typeof $json.query === 'object') ? $json.query : {};\n\nreturn [{ json: { ...body, action, headers, query } }];"
+        "jsCode": "const body =\n  ($json && typeof $json === 'object' && $json.body && typeof $json.body === 'object')\n    ? $json.body\n    : $json;\n\nconst action = String(body.action || '').trim();\n\nconst headers = ($json && $json.headers && typeof $json.headers === 'object') ? $json.headers : {};\nconst query = ($json && $json.query && typeof $json.query === 'object') ? $json.query : {};\n\nreturn [{ json: { ...body, action, headers, query } }];"
       },
-      "id": "Code_Normalize_Input",
-      "name": "Code: normalize input",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        320,
-        260
-      ]
+        224,
+        64
+      ],
+      "id": "9bd293aa-04d6-46e3-82b5-c8841bfb650a",
+      "name": "Normalize input"
     },
     {
       "parameters": {
-        "dataType": "string",
-        "propertyName": "action",
-        "value1": "={{$json.action}}",
-        "rules": [
-          {
-            "operation": "equal",
-            "value": "request",
-            "value2": "request"
-          },
-          {
-            "operation": "equal",
-            "value": "status",
-            "value2": "status"
-          },
-          {
-            "operation": "equal",
-            "value": "notify",
-            "value2": "notify"
-          }
-        ]
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "request",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "d75d8239-7fc4-4f97-af2d-82da37640154"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Request"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "a9abf42c-c8b6-4f53-8227-d953c57d0fb8",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "4aef9034-0e00-4cad-9501-5fbc4589efef",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "notify",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Notify"
+            }
+          ]
+        },
+        "options": {}
       },
-      "id": "Switch_Action",
-      "name": "Switch: action",
       "type": "n8n-nodes-base.switch",
-      "typeVersion": 2,
+      "typeVersion": 3.4,
       "position": [
-        420,
-        260
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Webhook payload shape differs by n8n version/settings.\n// Prefer `body` when present, otherwise use the root json.\nconst b = ($json && typeof $json === 'object' && $json.body && typeof $json.body === 'object') ? $json.body : $json;\n\n// Optional shared-secret auth (matches KUBE_OPS_COPILOT_N8N_BEARER_TOKEN)\nconst expected = ($env.KOC_N8N_BEARER_TOKEN || '').trim();\nif (expected) {\n  const h = ($json && $json.headers && typeof $json.headers === 'object') ? $json.headers : {};\n  const auth = String((h.authorization || $headers.authorization || '')).trim();\n  if (auth !== `Bearer ${expected}`) {\n    throw new Error('unauthorized');\n  }\n}\n\nconst approvalId = String(b.approvalId || '').trim();\nif (!approvalId) throw new Error('approvalId is required');\n\n// Keep the message short & actionable\nconst summary = String(b.summary || '').trim();\nconst operation = String(b.operation || '').trim();\nconst target = String(b.target || '').trim();\nconst planPath = String(b.planPath || '').trim();\n\nlet details = String(b.details || '').trim();\nif (details.length > 500) details = details.slice(0, 500) + '…';\n\n// Persist in workflow static data (stored in n8n DB)\nconst store = getWorkflowStaticData('global');\nstore[approvalId] = {\n  approvalId,\n  decision: 'pending',\n  approver: '',\n  reason: 'awaiting decision',\n  createdAt: new Date().toISOString(),\n  summary,\n  operation,\n  target,\n  planPath,\n  details\n};\n\n// Build decision URLs for approve/deny buttons\nconst publicBase = ($env.KOC_PUBLIC_BASE_URL || '').replace(/\/+$/, '');\nif (!publicBase) throw new Error('KOC_PUBLIC_BASE_URL is required (public URL to your n8n)');\n\nconst decisionSecret = ($env.KOC_DECISION_SECRET || '').trim();\nif (!decisionSecret) throw new Error('KOC_DECISION_SECRET is required');\n\nconst approveUrl = `${publicBase}/webhook/koc-approval-decision?approvalId=${encodeURIComponent(approvalId)}&decision=approved&token=${encodeURIComponent(decisionSecret)}`;\nconst denyUrl = `${publicBase}/webhook/koc-approval-decision?approvalId=${encodeURIComponent(approvalId)}&decision=denied&token=${encodeURIComponent(decisionSecret)}`;\n\nreturn [{ json: { approvalId, summary, operation, target, details, planPath, approveUrl, denyUrl } }];"
-      },
-      "id": "Code_Request_Store",
-      "name": "Code: store pending + URLs",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        660,
-        150
-      ]
-    },
-    {
-      "parameters": {
-        "url": "=https://api.telegram.org/bot{{$env.KOC_TELEGRAM_BOT_TOKEN}}/sendMessage",
-        "method": "POST",
-        "sendBody": true,
-        "contentType": "json",
-        "jsonBody": "={\n  \"chat_id\": $env.KOC_TELEGRAM_CHAT_ID,\n  \"parse_mode\": \"HTML\",\n  \"disable_web_page_preview\": true,\n  \"text\": `<b>K8S AI Agent</b>\\nApproval requested: <code>${$json.approvalId}</code>\\n\\n<b>Change</b>\\n${$json.operation} → <code>${$json.target}</code>\\n\\n<b>Why</b>\\n${$json.details || 'n/a'}\\n`,\n  \"reply_markup\": {\n    \"inline_keyboard\": [\n      [\n        {\"text\": \"Approve\", \"url\": $json.approveUrl},\n        {\"text\": \"Deny\", \"url\": $json.denyUrl}\n      ]\n    ]\n  }\n}"
-      },
-      "id": "HTTP_Telegram",
-      "name": "Notify: Telegram (buttons)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [
-        920,
-        150
+        448,
+        48
       ],
-      "continueOnFail": true
+      "id": "079e64c4-1dd2-4dbb-8ac8-636f925f050c",
+      "name": "Switch"
     },
     {
       "parameters": {
-        "respondWith": "json",
-        "responseBody": "={\"approvalId\": $json.approvalId, \"decision\": \"pending\", \"approver\": \"\", \"reason\": \"awaiting decision\", \"raw\": $json}",
-        "options": {}
+        "jsCode": "const b = $json;\n\nconst approvalId = String(b.approvalId || '').trim();\nif (!approvalId) throw new Error('approvalId is required');\n\nconst summary = String(b.summary || '').trim();\nconst operation = String(b.operation || '').trim();\nconst target = String(b.target || '').trim();\nconst planPath = String(b.planPath || '').trim();\n\nlet details = String(b.details || '').trim();\nif (details.length > 500) details = details.slice(0, 500) + '…';\n\nconst publicBase = String($env.KOC_PUBLIC_BASE_URL || '').replace(/\\/+$/, '');\nif (!publicBase) throw new Error('KOC_PUBLIC_BASE_URL is required');\n\nconst decisionSecret = String($env.KOC_DECISION_SECRET || '').trim();\nif (!decisionSecret) throw new Error('KOC_DECISION_SECRET is required');\n\nconst approveUrl =\n  `${publicBase}/webhook/koc-approval-decision?approvalId=${encodeURIComponent(approvalId)}&decision=approved&token=${encodeURIComponent(decisionSecret)}`;\nconst denyUrl =\n  `${publicBase}/webhook/koc-approval-decision?approvalId=${encodeURIComponent(approvalId)}&decision=denied&token=${encodeURIComponent(decisionSecret)}`;\n\nreturn [{\n  json: {\n    approvalId,\n    decision: 'pending',\n    approver: '',\n    reason: 'awaiting decision',\n    createdAt: new Date().toISOString(),\n    summary,\n    operation,\n    target,\n    planPath,\n    details,\n    approveUrl,\n    denyUrl,\n  }\n}];"
       },
-      "id": "Respond_Request",
-      "name": "Respond: request",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
-      "position": [
-        1140,
-        150
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const b = ($json && typeof $json === 'object' && $json.body && typeof $json.body === 'object') ? $json.body : $json;\nconst expected = ($env.KOC_N8N_BEARER_TOKEN || '').trim();\nif (expected) {\n  const h = ($json && $json.headers && typeof $json.headers === 'object') ? $json.headers : {};\n  const auth = String((h.authorization || $headers.authorization || '')).trim();\n  if (auth !== `Bearer ${expected}`) {\n    throw new Error('unauthorized');\n  }\n}\n\nconst approvalId = String(b.approvalId || '').trim();\nif (!approvalId) throw new Error('approvalId is required');\n\nconst store = getWorkflowStaticData('global');\nconst rec = store[approvalId];\nif (!rec) {\n  return [{ json: { approvalId, decision: 'pending', approver: '', reason: 'unknown approval id', raw: {} } }];\n}\nreturn [{ json: { approvalId, decision: rec.decision || 'pending', approver: rec.approver || '', reason: rec.reason || '', raw: rec } }];"
-      },
-      "id": "Code_Status_Read",
-      "name": "Code: read status",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        660,
-        370
-      ]
-    },
-    {
-      "parameters": {
-        "respondWith": "json",
-        "responseBody": "={{$json}}",
-        "options": {}
-      },
-      "id": "Respond_Status",
-      "name": "Respond: status",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
-      "position": [
-        900,
-        370
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const b = ($json && typeof $json === 'object' && $json.body && typeof $json.body === 'object') ? $json.body : $json;\nconst expected = ($env.KOC_N8N_BEARER_TOKEN || '').trim();\nif (expected) {\n  const h = ($json && $json.headers && typeof $json.headers === 'object') ? $json.headers : {};\n  const auth = String((h.authorization || $headers.authorization || '')).trim();\n  if (auth !== `Bearer ${expected}`) {\n    throw new Error('unauthorized');\n  }\n}\n\nconst title = String(b.title || 'K8S AI Agent').trim();\nlet body = String(b.body || '').trim();\nif (body.length > 800) body = body.slice(0, 800) + '…';\n\nreturn [{ json: { title, body } }];"
-      },
-      "id": "Code_Notify_Normalize",
-      "name": "Code: normalize notify",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        660,
-        520
-      ]
-    },
-    {
-      "parameters": {
-        "url": "=https://api.telegram.org/bot{{$env.KOC_TELEGRAM_BOT_TOKEN}}/sendMessage",
-        "method": "POST",
-        "sendBody": true,
-        "contentType": "json",
-        "jsonBody": "={\n  \"chat_id\": $env.KOC_TELEGRAM_CHAT_ID,\n  \"parse_mode\": \"HTML\",\n  \"disable_web_page_preview\": true,\n  \"text\": `<b>${$json.title}</b>\\n${$json.body}`\n}"
-      },
-      "id": "HTTP_Telegram_Notify",
-      "name": "Notify: Telegram (notify)",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [
-        920,
-        520
+        672,
+        -128
       ],
-      "continueOnFail": true
+      "id": "b7f88a90-1834-4a1f-bb7b-563bda621634",
+      "name": "Store pending + build decision URLs"
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={\"ok\": true}",
+        "responseBody": "{\n  \"approvalId\": \"{{$json.approvalId}}\",\n  \"decision\": \"pending\",\n  \"approver\": \"\",\n  \"reason\": \"awaiting decision\"\n}",
         "options": {}
       },
-      "id": "Respond_Notify",
-      "name": "Respond: notify",
       "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
+      "typeVersion": 1.5,
       "position": [
-        1140,
-        520
-      ]
+        1344,
+        -128
+      ],
+      "id": "2a81b5cc-ed1a-46f7-8a7c-dcf52e813798",
+      "name": "Respond to Webhook"
     },
     {
       "parameters": {
-        "path": "koc-approval-decision",
-        "httpMethod": "GET",
-        "responseMode": "responseNode",
-        "options": {}
+        "jsCode": "const approvalId = String($json.approvalId || '').trim();\n\n// В зависимости от ноды Data Tables, записи могут быть в items[] или в $json.data.\n// Самый универсальный способ: берём первую входящую запись как row, иначе pending.\nconst row = items[0]?.json || {};\n\nif (!row || Object.keys(row).length === 0 || !row.approvalId) {\n  return [{ json: { approvalId, decision: 'pending', approver: '', reason: 'unknown approval id' } }];\n}\n\nreturn [{\n  json: {\n    approvalId: String(row.approvalId || approvalId),\n    decision: String(row.decision || 'pending'),\n    approver: String(row.approver || ''),\n    reason: String(row.reason || ''),\n    raw: row,\n  }\n}];"
       },
-      "id": "Webhook_Decision",
-      "name": "Webhook: Decision (button click)",
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2,
-      "position": [
-        200,
-        650
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Query params can appear under `$json.query` depending on n8n version.\nconst q = ($json && typeof $json === 'object' && $json.query && typeof $json.query === 'object') ? $json.query : $json;\n\nconst approvalId = String(q.approvalId || '').trim();\nconst decision = String(q.decision || '').trim().toLowerCase();\nconst token = String(q.token || '').trim();\n\nconst expected = ($env.KOC_DECISION_SECRET || '').trim();\nif (!expected || token !== expected) {\n  return [{ json: { ok: false, message: 'unauthorized' } }];\n}\nif (!approvalId) return [{ json: { ok: false, message: 'missing approvalId' } }];\nif (!['approved','denied'].includes(decision)) return [{ json: { ok: false, message: 'invalid decision' } }];\n\nconst store = getWorkflowStaticData('global');\nconst rec = store[approvalId] || { approvalId };\nrec.decision = decision;\nrec.approver = 'n8n-link';\nrec.reason = `clicked ${decision}`;\nrec.decidedAt = new Date().toISOString();\nstore[approvalId] = rec;\n\nreturn [{ json: { ok: true, approvalId, decision } }];"
-      },
-      "id": "Code_Decision_Write",
-      "name": "Code: record decision",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        440,
-        650
-      ]
+        896,
+        64
+      ],
+      "id": "071c78e8-7a8f-490b-94e3-52a99fc6e263",
+      "name": "Read status"
     },
     {
       "parameters": {
-        "respondWith": "text",
-        "responseBody": "={{$json.ok ? ('Recorded: ' + $json.decision + ' for ' + $json.approvalId + '. You can close this tab.') : ('Error: ' + $json.message)}}",
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
         "options": {}
       },
-      "id": "Respond_Decision",
-      "name": "Respond: decision",
       "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1120,
+        64
+      ],
+      "id": "d6a318d2-ff34-47eb-bb8e-ec5cf9b758e2",
+      "name": "Respond to Webhook1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const root = items[0].json;\nconst action = root.body && root.body.action || root.action;\n\n// 1. Проверка токена (общая для всех веток)\nconst got = root.headers && root.headers.authorization;\nconst expected = `Bearer ${$env.KOC_DECISION_SECRET}`;\nif (!got || !expected || got !== expected) {\n  return [{ json: { ok: false, message: 'unauthorized', got, expected } }];\n}\n\n// 2. Ветка notify — только токен, ничего больше не нужно\nif (action === 'notify') {\n  return [{ json: { ok: true, message: 'notify accepted' } }];\n}\n\n// 3. Ветка approval — тут нужны approvalId и decision\nconst q = (root && typeof root === 'object' && root.query && typeof root.query === 'object') ? root.query : root;\nconst approvalId = String(q.approvalId || '').trim();\nconst decision = String(q.decision || '').trim().toLowerCase();\n\nif (!approvalId) return [{ json: { ok: false, message: 'missing approvalId' } }];\nif (!['approved', 'denied'].includes(decision)) return [{ json: { ok: false, message: 'invalid decision' } }];\n\n// ...остальная логика для approval...\nreturn [{ json: { ok: true, approvalId, decision } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        256
+      ],
+      "id": "33d10e21-1f5b-4142-a241-29f27b91e40c",
+      "name": "Normalize notify"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"ok\": true}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        1120,
+        256
+      ],
+      "id": "f6655d56-92eb-48fb-be23-206722cc97ad",
+      "name": "Respond: “notify response\""
+    },
+    {
+      "parameters": {
+        "chatId": "={{$env.KOC_TELEGRAM_CHAT_ID}}",
+        "text": "={{\"<b>K8S AI Agent</b>\\n\" + \"Approval requested: <code>\" + $json.approvalId + \"</code>\\n\\n\" + \"<b>Change</b>\\n\" + $json.operation + \" → <code>\" + $json.target + \"</code>\\n\\n\" + \"<b>Why</b>\\n\" + ($json.details || \"n/a\") + \"\\n\"}}",
+        "replyMarkup": "inlineKeyboard",
+        "inlineKeyboard": {
+          "rows": [
+            {
+              "row": {
+                "buttons": [
+                  {
+                    "text": "Approve",
+                    "additionalFields": {
+                      "callback_data": "=approve:{{$json.approvalId}}"
+                    }
+                  },
+                  {
+                    "text": "Deny",
+                    "additionalFields": {
+                      "callback_data": "=deny:{{$json.approvalId}}"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1120,
+        -128
+      ],
+      "id": "b8421055-fd25-4904-8b13-50a15c06993b",
+      "name": "Send a text message",
+      "webhookId": "8fbff950-487f-4bfa-9486-3cc196c41efe",
+      "credentials": {
+        "telegramApi": {
+          "id": "9ocnlE7k7BjbGzsB",
+          "name": "Telegram - K8S Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "updates": [
+          "callback_query"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        480
+      ],
+      "id": "893486e5-6d12-4714-8776-531c77e9fd98",
+      "name": "Telegram Trigger",
+      "webhookId": "20a97fd2-2cda-4165-98f3-9307cdc33c00",
+      "credentials": {
+        "telegramApi": {
+          "id": "9ocnlE7k7BjbGzsB",
+          "name": "Telegram - K8S Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const u = $json;\nconst cq = u.callback_query;\nif (!cq) return [{ json: { ok: true, kind: \"ignore\" } }];\n\nconst data = String(cq.data || \"\").trim();\nconst callbackQueryId = String(cq.id || \"\").trim();\n\nconst msg = cq.message || {};\nconst chatId = msg.chat?.id;\nconst messageId = msg.message_id;\n\nlet decision = \"\";\nlet approvalId = \"\";\n\nif (data.startsWith(\"approve:\")) {\n  decision = \"approved\";\n  approvalId = data.slice(\"approve:\".length).trim();\n} else if (data.startsWith(\"deny:\")) {\n  decision = \"denied\";\n  approvalId = data.slice(\"deny:\".length).trim();\n}\n\nif (!approvalId || !decision) return [{ json: { ok: true, kind: \"ignore\" } }];\n\nreturn [{\n  json: { approvalId, decision, callbackQueryId, chatId, messageId }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        480
+      ],
+      "id": "130affbf-7a25-460c-a4c1-b61b764d315b",
+      "name": "Parse Callback"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{$env.KOC_TELEGRAM_BOT_TOKEN}}/answerCallbackQuery",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "callback_query_id",
+              "value": "={{ $('Parse Callback').item.json.callbackQueryId }}"
+            },
+            {
+              "name": "text",
+              "value": "={{$json.decision === 'approved' ? 'Approved' : 'Denied'}}"
+            },
+            {
+              "name": "show_alert",
+              "value": "false"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        672,
+        480
+      ],
+      "id": "6e915dfb-25a0-43ee-860a-0287f604a707",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{$env.KOC_TELEGRAM_BOT_TOKEN}}/editMessageReplyMarkup",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ $('Parse Callback').item.json.chatId }}"
+            },
+            {
+              "name": "message_id",
+              "value": "={{ $('Parse Callback').item.json.messageId }}"
+            },
+            {
+              "name": "reply_markup",
+              "value": "={{ JSON.stringify({ inline_keyboard: [] }) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        896,
+        480
+      ],
+      "id": "26eb2fb6-bbee-48cb-a9e3-a0a4b79c46de",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "dataTableId": {
+          "__rl": true,
+          "value": "9VmKMQaUAL5FeUAE",
+          "mode": "list",
+          "cachedResultName": "k8s-bot",
+          "cachedResultUrl": "/projects/oae4C2E1F9eaRsa6/datatables/9VmKMQaUAL5FeUAE"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "approvalId",
+              "keyValue": "={{$json.approvalId}}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "approvalId": "={{ $json.approvalId }}",
+            "decision": "={{ $json.decision }}",
+            "approver": "={{ $json.approver }}",
+            "reason": "={{ $json.reason }}",
+            "summary": "={{ $json.summary }}",
+            "operation": "={{ $json.operation }}",
+            "target": "={{ $json.target }}",
+            "planPath": "={{ $json.planPath }}",
+            "details": "={{ $json.details }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "approvalId",
+              "displayName": "approvalId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "decision",
+              "displayName": "decision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "approver",
+              "displayName": "approver",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "reason",
+              "displayName": "reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "summary",
+              "displayName": "summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "operation",
+              "displayName": "operation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "target",
+              "displayName": "target",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "planPath",
+              "displayName": "planPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "details",
+              "displayName": "details",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
       "typeVersion": 1,
       "position": [
-        680,
-        650
-      ]
+        896,
+        -128
+      ],
+      "id": "d400366d-b1ad-4b7a-8163-81286170744c",
+      "name": "Upsert row(s)"
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "dataTableId": {
+          "__rl": true,
+          "value": "9VmKMQaUAL5FeUAE",
+          "mode": "list",
+          "cachedResultName": "k8s-bot",
+          "cachedResultUrl": "/projects/oae4C2E1F9eaRsa6/datatables/9VmKMQaUAL5FeUAE"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "approvalId",
+              "keyValue": "={{$json.approvalId}}"
+            }
+          ]
+        },
+        "limit": 1
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        672,
+        64
+      ],
+      "id": "8f6af6f5-ee26-42c0-9ca9-2591c0eee1c4",
+      "name": "Data Tables(Get)"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "dataTableId": {
+          "__rl": true,
+          "value": "9VmKMQaUAL5FeUAE",
+          "mode": "list",
+          "cachedResultName": "k8s-bot",
+          "cachedResultUrl": "/projects/oae4C2E1F9eaRsa6/datatables/9VmKMQaUAL5FeUAE"
+        },
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "approvalId",
+              "keyValue": "={{ $json.approvalId }}"
+            }
+          ]
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "reason": "={{\"clicked \" + $json.decision}}",
+            "approver": "={{$json.callbackQueryId}}",
+            "decision": "={{$json.decision}}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "approvalId",
+              "displayName": "approvalId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "decision",
+              "displayName": "decision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "approver",
+              "displayName": "approver",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "reason",
+              "displayName": "reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "summary",
+              "displayName": "summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "operation",
+              "displayName": "operation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "target",
+              "displayName": "target",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "planPath",
+              "displayName": "planPath",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            },
+            {
+              "id": "details",
+              "displayName": "details",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1,
+      "position": [
+        448,
+        480
+      ],
+      "id": "3eaa550a-78a1-463f-b71c-f02e6c7d07e9",
+      "name": "Data Tables: Update row"
+    },
+    {
+      "parameters": {
+        "chatId": "={{$env.KOC_TELEGRAM_CHAT_ID}}",
+        "text": "={{$('Switch').item.json.title + \"\\n\" + $('Switch').item.json.body}}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        896,
+        256
+      ],
+      "id": "91031394-8250-40fa-a71e-814883eafd01",
+      "name": "Send a text message1",
+      "webhookId": "04bdb0da-8f2e-463c-a562-76c3c0f77473",
+      "credentials": {
+        "telegramApi": {
+          "id": "9ocnlE7k7BjbGzsB",
+          "name": "Telegram - K8S Bot"
+        }
+      }
     }
   ],
   "connections": {
-    "Webhook: Approval API": {
+    "Webhook": {
       "main": [
         [
           {
-            "node": "Code: normalize input",
+            "node": "Normalize input",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Code: normalize input": {
+    "Normalize input": {
       "main": [
         [
           {
-            "node": "Switch: action",
+            "node": "Switch",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Switch: action": {
+    "Switch": {
       "main": [
         [
           {
-            "node": "Code: store pending + URLs",
+            "node": "Store pending + build decision URLs",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Code: read status",
+            "node": "Data Tables(Get)",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Code: normalize notify",
+            "node": "Normalize notify",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Code: store pending + URLs": {
+    "Store pending + build decision URLs": {
       "main": [
         [
           {
-            "node": "Notify: Telegram (buttons)",
+            "node": "Upsert row(s)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Notify: Telegram (buttons)": {
+    "Read status": {
       "main": [
         [
           {
-            "node": "Respond: request",
+            "node": "Respond to Webhook1",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Code: read status": {
+    "Normalize notify": {
       "main": [
         [
           {
-            "node": "Respond: status",
+            "node": "Send a text message1",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Code: normalize notify": {
+    "Send a text message": {
       "main": [
         [
           {
-            "node": "Notify: Telegram (notify)",
+            "node": "Respond to Webhook",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Notify: Telegram (notify)": {
+    "Telegram Trigger": {
       "main": [
         [
           {
-            "node": "Respond: notify",
+            "node": "Parse Callback",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Webhook: Decision (button click)": {
+    "Parse Callback": {
       "main": [
         [
           {
-            "node": "Code: record decision",
+            "node": "Data Tables: Update row",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Code: record decision": {
+    "HTTP Request": {
       "main": [
         [
           {
-            "node": "Respond: decision",
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert row(s)": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data Tables(Get)": {
+      "main": [
+        [
+          {
+            "node": "Read status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data Tables: Update row": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message1": {
+      "main": [
+        [
+          {
+            "node": "Respond: “notify response\"",
             "type": "main",
             "index": 0
           }
@@ -353,10 +850,114 @@
       ]
     }
   },
-  "active": false,
-  "settings": {
-    "executionTimeout": 120,
-    "saveExecutionProgress": true
+  "pinData": {
+    "Webhook": [
+      {
+        "headers": {
+          "host": "n8n.cryptomonitor.app",
+          "user-agent": "Go-http-client/2.0",
+          "content-length": "3639",
+          "accept-encoding": "gzip, br",
+          "authorization": "Bearer hAQqepvDDxQuV97LUbVvdXM0T5aP9Q27NXBbbMqfhNs=",
+          "cdn-loop": "cloudflare; loops=1",
+          "cf-connecting-ip": "5.77.206.75",
+          "cf-ipcountry": "AM",
+          "cf-ray": "9dd4d7a0daf9d94c-EVN",
+          "cf-visitor": "{\"scheme\":\"https\"}",
+          "content-type": "application/json",
+          "via": "2.0 Caddy",
+          "x-forwarded-for": "172.68.124.145",
+          "x-forwarded-host": "n8n.cryptomonitor.app",
+          "x-forwarded-proto": "https",
+          "x-real-ip": "172.68.124.145"
+        },
+        "params": {},
+        "query": {},
+        "body": {
+          "action": "notify",
+          "title": "kube-ops-copilot suggest",
+          "body": "## 1) Triage order (evidence-first)\n\n1. **Missing readiness/liveness probes (medium, do this week, high confidence)**  \n   Affected deployments/containers (from report):  \n   - `gosell-test/prometheus-grafana`: `grafana-sc-dashboard`, `grafana-sc-datasources` (no readiness/liveness)  \n   - `gosell-test/prometheus-kube-prometheus-operator`: `kube-prometheus-stack` (no readiness/liveness)  \n   - `gosell-test/temporalio-admintools`: `admin-tools` (no readiness; has liveness)  \n   - `gosell-test/temporalio-frontend`: `temporal-frontend` (no readiness; has liveness)  \n   - `gosell-test/temporalio-history`: `temporal-history` (no readiness; has liveness)  \n   - `gosell-test/temporalio-matching`: `temporal-matching` (no readiness; has liveness)  \n   - `gosell-test/temporalio-web`: `temporal-web` (no readiness/liveness)  \n   - `gosell-test/temporalio-worker`: `temporal-worker` (no readiness/liveness)\n\n2. **Restart counts (low, backlog, medium confidence)**  \n   Top restarts are classified mostly as **SIGTERM (exit 143)** or **Completed (exit 0)** (benign patterns often seen during rollouts/drains). Confirm there’s no availability impact or unexpected rolling churn.\n\n3. **Missing CPU/memory limits (low, backlog, medium confidence)**  \n   13 containers missing limits (listed in evidence). Treat as preventive hardening; size using metrics first to avoid OOMKills/throttling.\n\n---\n\n## Likely root causes (based on provided hypotheses + evidence)\n\n- **Workload spec gaps (probes/limits not defined)**: multiple deployments lack probes and/or limits, consistent with Helm chart defaults or custom manifests that omit production hardening.  \n- **Restarts likely due to operational lifecycle events** (rollouts/node drains): restart samples show SIGTERM/Completed, not crash-like exits; need trend correlation to confirm.\n\n---\n\n## Next read-only verification commands (no changes)\n\n### A. Validate which containers truly have/omit probes (and current probe config)\n```bash\nkubectl -n gosell-test get deploy prometheus-grafana -o yaml | sed -n '/containers:/,$p'\nkubectl -n gosell-test get deploy prometheus-kube-prometheus-operator -o yaml | sed -n '/containers:/,$p'\nkubectl -n gosell-test get deploy temporalio-{admintools,frontend,history,matching,web,worker} -o yaml | sed -n '/containers:/,$p'\n```\n\n### B. Check pod readiness, recent events, and whether traffic could be routed prematurely\n```bash\nkubectl -n gosell-test get pods -o wide\nkubectl -n gosell-test describe pod -l app.kubernetes.io/name=temporal\nkubectl -n gosell-test get events --sort-by=.lastTimestamp\n```\n\n### C. Correlate restarts with rollout/drain timing; confirm termination reasons\n```bash\nkubectl get nodes -o wide\nkubectl -n gosell-test get pods --sort-by=.status.containerStatuses[0].restartCount\nkubectl -n gosell-test describe pod prometheus-prometheus-node-exporter-42v29\nkubectl -n gosell-test describe pod temporalio-matching-79c9c9c696-5tg9n\nkubectl -n gosell-test get rs -o wide\nkubectl -n gosell-test describe deploy temporalio-matching\n```\n\n### D. Use metrics APIs already detected to size resources / detect pressure (read-only)\n```bash\nkubectl top nodes\nkubectl top pods -A --sort-by=cpu\nkubectl top pods -A --sort-by=memory\n```\n\n---\n\n## 2) Single best production remediation (based on current evidence)\n\n**No safe automated remediation via this tool right now.**  \nThe highest-severity item is “missing probes,” but adding probes requires application-specific endpoints/thresholds; misconfigured probes…"
+        },
+        "webhookUrl": "https://n8n.cryptomonitor.app/webhook/koc-approval",
+        "executionMode": "production"
+      }
+    ],
+    "Telegram Trigger": [
+      {
+        "update_id": 615316884,
+        "callback_query": {
+          "id": "4835574041272520570",
+          "from": {
+            "id": 5420837112,
+            "is_bot": false,
+            "first_name": ".",
+            "username": "yyyggguuue",
+            "language_code": "en"
+          },
+          "message": {
+            "message_id": 19,
+            "sender_chat": {
+              "id": -1003815581960,
+              "title": "K8S Ai Agent",
+              "type": "channel"
+            },
+            "chat": {
+              "id": -1003815581960,
+              "title": "K8S Ai Agent",
+              "type": "channel"
+            },
+            "date": 1773669177,
+            "text": "K8S AI Agent\nApproval requested: 0678dc5a-c313-4f27-88d5-f60ef91b1178\n\nChange\nrollout_restart_deployment → kube-system/ebs-csi-node\n\nWhy\nThe report highlights crash-like restarts in critical system components, including control-plane adjuncts like the ebs-csi-node. Since these restarts may indicate temporary configuration or connectivity issues, a cautious, low-risk remediation is to rollout restart the affected system deployment (ebs-csi-node) to prompt it to reload with current configuration and reset transient errors without scaling down or making speculative changes.\n\nThis approach is chosen because:\n- It specifically targets…",
+            "entities": [
+              {
+                "offset": 0,
+                "length": 12,
+                "type": "bold"
+              },
+              {
+                "offset": 33,
+                "length": 36,
+                "type": "code"
+              },
+              {
+                "offset": 71,
+                "length": 6,
+                "type": "bold"
+              },
+              {
+                "offset": 107,
+                "length": 24,
+                "type": "code"
+              },
+              {
+                "offset": 133,
+                "length": 3,
+                "type": "bold"
+              }
+            ],
+            "reply_markup": {
+              "inline_keyboard": [
+                [
+                  {
+                    "text": "Approve",
+                    "callback_data": "approve:0678dc5a-c313-4f27-88d5-f60ef91b1178"
+                  },
+                  {
+                    "text": "Deny",
+                    "callback_data": "deny:0678dc5a-c313-4f27-88d5-f60ef91b1178"
+                  }
+                ]
+              ]
+            }
+          },
+          "chat_instance": "2498584580539381208",
+          "data": "deny:0678dc5a-c313-4f27-88d5-f60ef91b1178"
+        }
+      }
+    ]
   },
-  "versionId": "1"
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6fe2b4a46b3cb1598a5cfb75b2feb4f51abf673d8265cf72156dd408bdf88d25"
+  }
 }

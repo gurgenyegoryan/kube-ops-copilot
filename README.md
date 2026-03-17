@@ -244,7 +244,70 @@ Important:
 - if you want Telegram notifications directly from the CLI, you still need `--notify` plus `KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN` and `KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID`
 - if your n8n workflow itself sends Telegram messages, that is separate from the CLI notifier
 
-### 4. Execute an approved plan manually
+### 4. Terraform PR mode
+
+If your infrastructure is managed in Terraform and you give the tool access to that repo, it can take a GitOps-style remediation path:
+
+1. analyze the live cluster
+2. decide that the durable fix belongs in Terraform
+3. generate a Terraform PR plan
+4. request approval
+5. edit Terraform files locally
+6. run `terraform fmt`
+7. create a branch and commit
+8. optionally push and open a GitHub PR
+
+Basic example:
+
+```bash
+./kube-ops-copilot terraform-pr \
+  --llm-provider openai \
+  --llm-model gpt-5.2 \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --infra-repo-path ~/infra/live/prod \
+  --approval-provider n8n \
+  --wait-approval \
+  --apply
+```
+
+Push branch and open PR:
+
+```bash
+./kube-ops-copilot terraform-pr \
+  --llm-provider openai \
+  --llm-model gpt-5.2 \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --infra-repo-path ~/infra/live/prod \
+  --approval-provider n8n \
+  --wait-approval \
+  --apply \
+  --git-push \
+  --open-pr \
+  --base-branch main
+```
+
+Important:
+
+- this mode is Terraform-only in the current version
+- it edits only files present in the sampled repo inventory sent to the LLM
+- edits are applied as exact literal search/replace operations
+- by default it refuses to work in a dirty git repo
+- it does not run `terraform apply`
+- `terraform validate` is optional because many repos need backend/module init or wrapper tooling
+
+Useful flags:
+
+- `--infra-repo-path`
+- `--git-push`
+- `--open-pr`
+- `--base-branch`
+- `--terraform-validate`
+- `--require-clean-repo`
+- `--plan-out`
+
+### 5. Execute an approved plan manually
 
 Execution is dry-run by default.
 
@@ -471,6 +534,9 @@ Current limitations are important:
 - the tool does not yet dynamically query every detected telemetry backend
 - some findings are still Kubernetes-native rather than full cross-signal correlation
 - absence of evidence is not proof of absence
+- Terraform PR mode currently supports only exact search/replace edits
+- Terraform PR mode assumes plain `git`, optional `gh`, and plain `terraform` workflows
+- very large or indirect Terraform repos may require passing a narrower `--infra-repo-path`
 
 In other words: this project is already designed to avoid shallow hardcoded advice, but it is still evolving toward deeper multi-backend runtime analysis.
 
