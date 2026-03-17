@@ -13,12 +13,23 @@ type Config struct {
 	Context    string
 }
 
-func NewClient(cfg Config) (*kubernetes.Clientset, error) {
+type Client struct {
+	Kubernetes       *kubernetes.Clientset
+	WarningCollector *WarningCollector
+}
+
+func NewClient(cfg Config) (*Client, error) {
 	restCfg, err := loadRESTConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return kubernetes.NewForConfig(restCfg)
+	warnings := NewWarningCollector()
+	restCfg.WarningHandler = warnings
+	cs, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{Kubernetes: cs, WarningCollector: warnings}, nil
 }
 
 func loadRESTConfig(cfg Config) (*rest.Config, error) {

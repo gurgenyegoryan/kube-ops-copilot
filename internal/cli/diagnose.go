@@ -6,13 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/clusterhealth"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/clusterinfo"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/events"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/pdb"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/resources"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/workloads"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/engine"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/kube"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/notify"
@@ -45,17 +38,13 @@ func NewDiagnoseCmd() *cobra.Command {
 				return err
 			}
 
-			e := engine.Engine{Analyzers: []analyzer.Analyzer{
-				&clusterinfo.Analyzer{Client: client},
-				&clusterhealth.Analyzer{Client: client, IncludeSystemNamespaces: f.IncludeSystemNamespaces, CollectPodLogHints: true, MaxPodLogHints: 3, PodLogTailLines: 200},
-				&events.Analyzer{Client: client, Since: f.EventsSince},
-				&workloads.Analyzer{Client: client, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
-				&resources.Analyzer{Client: client, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
-				&pdb.Analyzer{Client: client, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
-			}}
+			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, client.Kubernetes, f.IncludeSystemNamespaces, f.EventsSince)}
 			results, err := e.Run(ctx)
 			if err != nil {
 				return err
+			}
+			if wr := warningResult(client.WarningCollector.Snapshot()); len(wr.Findings) > 0 || len(wr.Evidence) > 0 || len(wr.HiddenRisks) > 0 || len(wr.Recommended.ShortTerm) > 0 {
+				results = append(results, wr)
 			}
 
 			rep := report.Build(results)

@@ -9,13 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/clusterhealth"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/clusterinfo"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/events"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/pdb"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/resources"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/workloads"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/engine"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/kube"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/llm"
@@ -67,17 +60,13 @@ func NewSuggestCmd() *cobra.Command {
 				return err
 			}
 
-			e := engine.Engine{Analyzers: []analyzer.Analyzer{
-				&clusterinfo.Analyzer{Client: kclient},
-				&clusterhealth.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces, CollectPodLogHints: true, MaxPodLogHints: 3, PodLogTailLines: 200},
-				&events.Analyzer{Client: kclient, Since: f.EventsSince},
-				&workloads.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
-				&resources.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
-				&pdb.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
-			}}
+			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, kclient.Kubernetes, f.IncludeSystemNamespaces, f.EventsSince)}
 			results, err := e.Run(ctx)
 			if err != nil {
 				return err
+			}
+			if wr := warningResult(kclient.WarningCollector.Snapshot()); len(wr.Findings) > 0 || len(wr.Evidence) > 0 || len(wr.HiddenRisks) > 0 || len(wr.Recommended.ShortTerm) > 0 {
+				results = append(results, wr)
 			}
 			rep := report.Build(results)
 
@@ -86,13 +75,21 @@ func NewSuggestCmd() *cobra.Command {
 				return err
 			}
 
-			system := strings.TrimSpace(`You are Kube Ops Copilot, an approval-driven Kubernetes SRE assistant.
+			system := strings.TrimSpace(`You are Kube Ops Copilot, an approval-driven Kubernetes SRE investigator.
 You must be evidence-first. Use the report as truth; do not invent cluster facts.
+You must reason from discovered cluster capabilities, gaps, and workload signals instead of assuming Prometheus, Loki, tracing, service mesh, or autoscaling are present.
+If a capability is not explicitly observed, say "not confirmed" instead of assuming it exists.
 You must never apply changes.
 When you propose kubectl commands, keep them read-only by default.
 
+Prioritize production-grade analysis:
+- identify what the cluster actually has
+- identify what is missing or not confirmed
+- distinguish platform blind spots from active incidents
+- recommend the smallest high-leverage improvement first
+
 If asked to propose a remediation, propose ONLY one best remediation for the current evidence.
-If the remediation is executable by this tool, include EXACTLY ONE JSON ExecutionPlan in a fenced code block.
+Choose an executable remediation only if the evidence clearly supports it and it fits the allowed plan types.
 Allowed operation types:
 - rollout_restart_deployment
 - scale_deployment
@@ -100,7 +97,7 @@ Allowed operation types:
 If no safe executable plan can be proposed from the evidence, output a JSON fenced block with: null
 Output professional, concise Markdown.`)
 
-			user := fmt.Sprintf("Here is the deterministic diagnosis report as JSON:\n\n%s\n\nTask:\n1) Provide triage order, likely root causes, and next read-only verification commands.\n2) Provide the single best production remediation (if any).\n\nOutput format requirements:\n- First, Markdown.\n- Then a fenced code block: ```json ...``` containing either an ExecutionPlan object or null.\n\nExecutionPlan JSON schema (must match exactly):\n{\n  \"apiVersion\": \"kube-ops-copilot/v1alpha1\",\n  \"kind\": \"ExecutionPlan\",\n  \"createdAt\": \"RFC3339\",\n  \"approvalId\": \"\",\n  \"operation\": {\n    \"type\": \"rollout_restart_deployment|scale_deployment\",\n    \"namespace\": \"...\",\n    \"name\": \"...\",\n    \"replicas\": 3,\n    \"reason\": \"...\"\n  },\n  \"verify\": { \"timeoutSeconds\": 180 }\n}\n\nNotes:\n- For rollout_restart_deployment, omit replicas.\n- For scale_deployment, replicas is required.\n- approvalId must be empty string.\n", string(repJSON))
+			user := fmt.Sprintf("Here is the deterministic diagnosis report as JSON:\n\n%s\n\nTask:\n1) Act as a production-readiness reviewer for this specific cluster snapshot.\n2) Explain what platform capabilities are explicitly observed, what is not confirmed, and which gaps most limit reliable production suggestions.\n3) Provide triage order, likely root causes, and next read-only verification commands.\n4) Provide the single best production remediation or production-readiness improvement for the current evidence.\n5) Do not recommend Prometheus/Loki/HPA/etc. as if they already exist unless the report explicitly shows them.\n\nOutput format requirements:\n- First, Markdown.\n- Then a fenced code block: ```json ...``` containing either an ExecutionPlan object or null.\n\nExecutionPlan JSON schema (must match exactly):\n{\n  \"apiVersion\": \"kube-ops-copilot/v1alpha1\",\n  \"kind\": \"ExecutionPlan\",\n  \"createdAt\": \"RFC3339\",\n  \"approvalId\": \"\",\n  \"operation\": {\n    \"type\": \"rollout_restart_deployment|scale_deployment\",\n    \"namespace\": \"...\",\n    \"name\": \"...\",\n    \"replicas\": 3,\n    \"reason\": \"...\"\n  },\n  \"verify\": { \"timeoutSeconds\": 180 }\n}\n\nNotes:\n- For rollout_restart_deployment, omit replicas.\n- For scale_deployment, replicas is required.\n- approvalId must be empty string.\n- If the best recommendation is not one of the allowed plan types, emit null in the JSON block and keep the recommendation in Markdown only.\n", string(repJSON))
 			resp, err := client.Complete(ctx, llm.Request{System: system, User: user, Model: f.Model, Temperature: f.Temperature})
 			if err != nil {
 				return err

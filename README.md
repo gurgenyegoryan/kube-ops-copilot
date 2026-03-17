@@ -2,13 +2,122 @@
 
 Kube Ops Copilot is an approval-driven Kubernetes reliability copilot.
 
-It provides deterministic, evidence-first diagnosis and (optionally) executes **operator-approved** remediation plans.
+Its goal is not to print generic Kubernetes advice. Its goal is to inspect a real cluster, understand what capabilities actually exist, detect active and latent risks, and produce operator-grade recommendations with explicit safety boundaries.
 
-## Principles
+It combines:
 
-- Evidence-first: every finding includes concrete signals.
-- Deterministic output: `diagnose` is stable and machine-friendly.
-- No silent changes: `execute` is gated by explicit approval flags and (optionally) external approval providers.
+- deterministic Kubernetes analysis
+- dynamic capability discovery
+- LLM-assisted operator narrative
+- approval-gated execution plans
+
+## What makes this different
+
+Most Kubernetes assistants assume too much:
+
+- they assume Prometheus exists
+- they assume Loki exists
+- they assume HPA exists
+- they assume ingress, GitOps, service mesh, tracing, cert management, or metrics pipelines are already present
+
+This project is designed to do the opposite.
+
+It first discovers what is actually visible in the cluster, then adapts its analysis. If a capability is not confirmed, it should say so clearly instead of hallucinating advice around tools that may not exist.
+
+## Core principles
+
+- Evidence-first: every finding should be grounded in observed Kubernetes state.
+- Dynamic discovery: the tool should infer what the cluster has instead of relying on hardcoded assumptions.
+- Cause over symptom: recommendations should focus on likely root causes and hidden risks, not just visible failures.
+- Safe execution: no impactful changes without explicit operator approval.
+- Auditability: actions, approvals, and post-change verification should remain explicit.
+
+## How it works
+
+The analysis pipeline has two layers.
+
+### 1. Base analyzers
+
+These always run:
+
+- cluster info
+- cluster health
+- events
+- workloads
+- resources
+- PDB checks
+- discovery
+
+### 2. Capability adapters
+
+After capability discovery, the tool dynamically enables additional analyzers depending on what the cluster appears to support.
+
+Current examples:
+
+- telemetry coverage analyzer
+- traffic exposure analyzer
+- autoscaling posture analyzer
+- policy coverage analyzer
+- API warning/deprecation capture from Kubernetes warning headers
+
+This architecture is intended to grow. The point is that the agent should not be locked to a single observability stack or platform pattern.
+
+## What the tool tries to discover automatically
+
+The discovery stage builds a capability inventory with states like:
+
+- `detected`
+- `candidate`
+- `not_confirmed`
+
+Examples of capability classes:
+
+- `resource_metrics`
+- `time_series_metrics`
+- `logs_backend`
+- `traces_backend`
+- `telemetry_pipeline`
+- `workload_autoscaling`
+- `traffic_entrypoint`
+- `network_segmentation`
+- `dynamic_storage`
+- `disruption_control`
+- `certificate_management`
+- `gitops`
+- `secret_management`
+- `service_mesh`
+
+These are inferred from a mix of:
+
+- Kubernetes API groups
+- Services and exposed ports
+- Pod-name heuristics
+- HPAs, ingresses, StorageClasses, PVCs, NetworkPolicies, quotas, and related objects
+
+This is deliberately capability-oriented, not vendor-oriented.
+
+## Current kinds of problems it can surface
+
+- NotReady nodes and pressure conditions
+- Pending pods
+- CrashLoopBackOff and restart churn
+- likely OOM signals
+- degraded deployments and stuck rollouts
+- missing requests, limits, and probes
+- missing or weak disruption controls
+- pending PVCs
+- externally exposed services without ready endpoints
+- exposed single-replica workloads without autoscaling posture
+- active namespaces missing basic policy defaults
+- observability coverage that is too weak to support confident production guidance
+
+It also tries to surface hidden risks, for example:
+
+- clusters that look healthy at rest but lack autoscaling
+- workloads that are externally exposed but depend on a single replica
+- telemetry gaps that make high-confidence suggestions impossible
+- namespaces likely to accumulate noisy-neighbor incidents because they lack guardrails
+- deprecated Kubernetes API usage that may break after a future cluster upgrade
 
 ## Install
 
@@ -20,7 +129,7 @@ go build ./cmd/kube-ops-copilot
 ./kube-ops-copilot version
 ```
 
-Or via Makefile (embeds version info via `-ldflags`):
+### Via Makefile
 
 ```bash
 make test
@@ -38,88 +147,184 @@ docker pull ghcr.io/<org>/<repo>:vX.Y.Z
 
 ## Quick start
 
-### 1) Diagnose
+### 1. Deterministic diagnosis
 
 ```bash
-# Defaults: in-cluster config; otherwise uses $KUBECONFIG or ~/.kube/config and the kubeconfig current-context.
+# Uses in-cluster config when available, otherwise $KUBECONFIG or ~/.kube/config
 ./kube-ops-copilot diagnose --output markdown
-
-# Override kubeconfig/context explicitly when needed
-./kube-ops-copilot diagnose --kubeconfig ~/.kube/config --context prod --output markdown
 ```
 
-### 2) (Optional) LLM suggestions
-
-`suggest` runs the same deterministic diagnosis pipeline, then asks an LLM for a human-friendly summary and safe next steps.
-
-If you pass `--plan-out`, it also asks the LLM for exactly one best executable remediation plan (when safe), and writes it as an `ExecutionPlan` JSON you can approve + execute.
+Explicit context:
 
 ```bash
-export OPENAI_API_KEY=... # or KUBE_OPS_COPILOT_OPENAI_API_KEY
-./kube-ops-copilot suggest --llm-provider openai --llm-model gpt-4.1-mini
+./kube-ops-copilot diagnose \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --output markdown
 ```
 
-Emit a plan file (if a safe executable plan is available):
+Useful flags:
 
-```bash
-./kube-ops-copilot suggest --llm-provider openai --llm-model gpt-4.1-mini \
-	--kubeconfig ~/.kube/config --context prod \
-	--plan-out /tmp/kube-ops-copilot-plan.json
-```
+- `--events-since 2h`
+- `--include-system-namespaces`
+- `--notify`
 
-### 2b) (Recommended) One-command remediation (n8n → Telegram approval)
+### 2. LLM-assisted suggestions
 
-This runs: diagnose → LLM proposes exactly one best executable plan → sends approval → waits → applies after approval.
+`suggest` runs the deterministic analyzers first, then asks an LLM to turn the evidence into:
+
+- triage order
+- likely root causes
+- production-readiness gaps
+- next read-only verification steps
+- one best remediation or improvement
+
+Example:
 
 ```bash
 export OPENAI_API_KEY=...
 
-# Your CLI host only needs access to n8n.
+./kube-ops-copilot suggest \
+  --llm-provider openai \
+  --llm-model gpt-4.1-mini \
+  --kubeconfig ~/.kube/config \
+  --context prod
+```
+
+Generate a machine-readable execution plan when possible:
+
+```bash
+./kube-ops-copilot suggest \
+  --llm-provider openai \
+  --llm-model gpt-4.1-mini \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --plan-out /tmp/kube-ops-copilot-plan.json
+```
+
+Important behavior:
+
+- if the cluster has no confirmed telemetry backend, the tool should say that clearly
+- if a capability is only weakly inferred, the narrative should treat it as a candidate, not a fact
+- if the best recommendation is not executable by the current plan schema, the Markdown can still recommend it while the JSON plan remains `null`
+
+### 3. Approval-gated remediation flow
+
+This is the higher-level flow:
+
+1. diagnose
+2. LLM proposes one best plan, if safe
+3. approval request is sent
+4. the tool waits for approval
+5. the plan is executed
+6. the result is verified
+
+Example with n8n:
+
+```bash
+export OPENAI_API_KEY=...
 export KUBE_OPS_COPILOT_N8N_WEBHOOK_URL='https://<your-n8n>/webhook/koc-approval'
 export KUBE_OPS_COPILOT_N8N_BEARER_TOKEN='optional-shared-secret'
 
-./kube-ops-copilot remediate --llm-provider openai --llm-model gpt-4.1-mini \
-	--approval-provider n8n \
-	--wait-approval \
-	--apply
-
-# Override kubeconfig/context explicitly when needed
-./kube-ops-copilot remediate --llm-provider openai --llm-model gpt-4.1-mini \
-	--kubeconfig ~/.kube/config --context prod \
-	--approval-provider n8n \
-	--wait-approval \
-	--apply
+./kube-ops-copilot remediate \
+  --llm-provider openai \
+  --llm-model gpt-4.1-mini \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --approval-provider n8n \
+  --notify \
+  --wait-approval \
+  --apply
 ```
 
-### 3) Execute an approved plan (safe-by-default)
+Important:
 
-Execution is plan-based and **dry-run by default**.
+- `--approval-provider n8n` controls how approval is requested and checked
+- `--notify` controls whether the CLI also sends a notification through the configured notifier stack
+- if you want Telegram notifications directly from the CLI, you still need `--notify` plus `KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN` and `KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID`
+- if your n8n workflow itself sends Telegram messages, that is separate from the CLI notifier
+
+### 4. Execute an approved plan manually
+
+Execution is dry-run by default.
 
 ```bash
 ./kube-ops-copilot execute \
-	--plan examples/execute-restart-deployment.json \
-	--approval-id TICKET-123 \
-	--approve \
-	--dry-run
+  --plan examples/execute-restart-deployment.json \
+  --approval-id TICKET-123 \
+  --approve \
+  --dry-run
 ```
 
-To apply changes:
+Actually apply:
 
 ```bash
 ./kube-ops-copilot execute \
-	--plan examples/execute-restart-deployment.json \
-	--kubeconfig ~/.kube/config \
-	--context prod \
-	--approval-id TICKET-123 \
-	--approve \
-	--dry-run=false
+  --plan examples/execute-restart-deployment.json \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --approval-id TICKET-123 \
+  --approve \
+  --dry-run=false
 ```
 
-## Notifications (n8n → Telegram)
+## Example operator scenarios
 
-Both `diagnose` and `execute` support `--notify`.
+### Scenario: cluster looks healthy, but suggestions are weak
 
-Recommended production setup: route notifications through n8n, and let n8n deliver them to Telegram.
+Run:
+
+```bash
+./kube-ops-copilot diagnose --context prod --output markdown
+```
+
+What you may see:
+
+- no immediate critical incident
+- `resource_metrics=not_confirmed`
+- `time_series_metrics=not_confirmed`
+- `logs_backend=not_confirmed`
+
+Interpretation:
+
+The cluster may be operational, but the agent will correctly lower its confidence because it cannot confirm enough telemetry coverage to reason about trends and pre-incident drift.
+
+### Scenario: exposed service, but no backends
+
+The traffic exposure analyzer may flag:
+
+- externally exposed services with zero ready endpoints
+
+That usually points to things like:
+
+- selector drift
+- readiness failures
+- failed rollout
+- no matching pods
+
+This is a good example of a real production problem the tool can catch without needing Prometheus or Loki.
+
+### Scenario: single replica behind public traffic
+
+The autoscaling posture analyzer may flag:
+
+- exposed deployment
+- single replica
+- no HPA
+
+That is not necessarily an active outage, but it is a very real production risk that can turn into one during node drains, restarts, or traffic bursts.
+
+## Notifications
+
+`diagnose`, `suggest`, and `execute` can be wired into Slack, Telegram, or n8n-based workflows depending on your setup.
+
+Recommended production pattern in this repo:
+
+- CLI or automation calls Kube Ops Copilot
+- notifications and approvals go through n8n
+- n8n forwards to Telegram or Slack
+
+Example:
 
 ```bash
 export KUBE_OPS_COPILOT_N8N_WEBHOOK_URL='https://<your-n8n>/webhook/koc-approval'
@@ -131,37 +336,46 @@ export KUBE_OPS_COPILOT_N8N_BEARER_TOKEN='optional-shared-secret'
 
 ## LLM providers
 
-`suggest` supports these providers:
+Supported providers for `suggest`:
 
-- OpenAI: `--llm-provider openai`
-	- API key env: `KUBE_OPS_COPILOT_OPENAI_API_KEY` or `OPENAI_API_KEY`
-- Anthropic: `--llm-provider anthropic`
-	- API key env: `KUBE_OPS_COPILOT_ANTHROPIC_API_KEY` or `ANTHROPIC_API_KEY`
-- Ollama (local): `--llm-provider ollama`
-	- No key; set `--llm-base-url` (default is provider-specific)
+- OpenAI
+- Anthropic
+- Ollama
 
-You can also pass `--llm-api-key`, but environment variables are recommended to avoid shell history leakage.
+Examples:
+
+```bash
+./kube-ops-copilot suggest --llm-provider openai --llm-model gpt-4.1-mini
+./kube-ops-copilot suggest --llm-provider anthropic --llm-model claude-3-5-sonnet-latest
+./kube-ops-copilot suggest --llm-provider ollama --llm-model llama3.1
+```
+
+Environment variables:
+
+- OpenAI: `KUBE_OPS_COPILOT_OPENAI_API_KEY` or `OPENAI_API_KEY`
+- Anthropic: `KUBE_OPS_COPILOT_ANTHROPIC_API_KEY` or `ANTHROPIC_API_KEY`
+- Ollama: set `--llm-base-url` if needed
 
 ## Approval workflows
 
 `execute` always requires:
 
-- `--approve` (explicit operator intent)
-- `--approval-id <id>` (ticket / change-id / workflow correlation)
+- `--approve`
+- `--approval-id <id>`
 
-Additionally, you can choose an approval provider to verify the approval decision before changes are applied.
+Optionally, you can also require an external approval provider before any change is applied.
 
-### Provider: manual (default)
-
-Manual provider is effectively “self-approved” once you pass the required CLI flags.
+### Manual provider
 
 ```bash
-./kube-ops-copilot execute --approval-provider manual --approval-id TICKET-123 --approve --plan ...
+./kube-ops-copilot execute \
+  --approval-provider manual \
+  --approval-id TICKET-123 \
+  --approve \
+  --plan examples/execute-restart-deployment.json
 ```
 
-### Provider: n8n (webhook)
-
-This mode calls an n8n webhook for both request creation and status checks.
+### n8n provider
 
 Configuration:
 
@@ -170,47 +384,56 @@ export KUBE_OPS_COPILOT_N8N_WEBHOOK_URL='https://<your-n8n>/webhook/koc-approval
 export KUBE_OPS_COPILOT_N8N_BEARER_TOKEN='optional-shared-secret'
 ```
 
-Contract (HTTP POST JSON):
-
-- Request:
+Approval request payload:
 
 ```json
 {"action":"request","approvalId":"...","summary":"...","details":"...","operation":"...","target":"...","planPath":"..."}
 ```
 
-- Status:
+Status payload:
 
 ```json
 {"action":"status","approvalId":"..."}
 ```
 
-Expected response shape:
+Expected response:
 
 ```json
 {"approvalId":"...","decision":"approved|denied|pending","approver":"...","reason":"...","raw":{}}
 ```
 
-End-to-end:
+End-to-end example:
 
 ```bash
-./kube-ops-copilot approval request --provider n8n --plan examples/execute-restart-deployment.json --write-plan
-./kube-ops-copilot execute --plan examples/execute-restart-deployment.json --approval-provider n8n --approval-id <approval-id> --approve --dry-run=false --wait-approval
+./kube-ops-copilot approval request \
+  --provider n8n \
+  --plan examples/execute-restart-deployment.json \
+  --write-plan
+
+./kube-ops-copilot execute \
+  --plan examples/execute-restart-deployment.json \
+  --approval-provider n8n \
+  --approval-id <approval-id> \
+  --approve \
+  --dry-run=false \
+  --wait-approval
 ```
 
-Recommended: use an n8n workflow that sends an approval message with **Approve/Deny buttons** which hit a second n8n webhook to record the decision. A ready-to-import example is provided at:
+Ready-to-import workflow:
 
 - [examples/n8n-approval-workflow.json](examples/n8n-approval-workflow.json)
 
-That workflow expects these n8n environment variables:
+Expected n8n environment variables:
 
-- `KOC_PUBLIC_BASE_URL` (public base URL of your n8n instance, e.g. `https://n8n.example.com`)
-- `KOC_DECISION_SECRET` (shared secret added to approve/deny button URLs)
-- Optional: `KOC_N8N_BEARER_TOKEN` (must match `KUBE_OPS_COPILOT_N8N_BEARER_TOKEN` if you set it)
-- Required: `KOC_TELEGRAM_BOT_TOKEN`, `KOC_TELEGRAM_CHAT_ID` (where n8n sends approval buttons)
+- `KOC_PUBLIC_BASE_URL`
+- `KOC_DECISION_SECRET`
+- optional `KOC_N8N_BEARER_TOKEN`
+- `KOC_TELEGRAM_BOT_TOKEN`
+- `KOC_TELEGRAM_CHAT_ID`
 
-### Provider: Telegram (reply-based)
+### Telegram provider
 
-This mode sends an approval request to a Telegram chat and considers it approved/denied when a user replies:
+The Telegram approval flow treats replies like:
 
 - `approve <approval-id>`
 - `deny <approval-id>`
@@ -222,33 +445,54 @@ export KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN='123456:ABC...'
 export KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID='-1001234567890'
 ```
 
-Request + execute:
+Example:
 
 ```bash
 id=$(./kube-ops-copilot approval request --provider telegram --plan examples/execute-restart-deployment.json --write-plan | awk '{print $NF}')
-./kube-ops-copilot execute --plan examples/execute-restart-deployment.json --approval-provider telegram --approval-id "$id" --approve --wait-approval --dry-run=false
+
+./kube-ops-copilot execute \
+  --plan examples/execute-restart-deployment.json \
+  --approval-provider telegram \
+  --approval-id "$id" \
+  --approve \
+  --wait-approval \
+  --dry-run=false
 ```
 
-Note: this implementation polls `getUpdates` and scans recent messages. Use unique approval IDs to reduce the chance of matching an older message.
+### Slack provider
 
-### Provider: Slack (interactive buttons)
+Slack support exists in the codebase, though the recommended production path in this repo remains n8n-based orchestration.
 
-Slack support exists in the codebase, but the recommended production setup in this repo is **n8n → Telegram**.
+## Limitations
 
-## CI / Lint
+Current limitations are important:
 
-- CI workflow: `.github/workflows/ci.yml` runs `go test ./...` and `golangci-lint`.
-- Local lint (requires `golangci-lint`):
+- capability detection is still heuristic in parts
+- the tool does not yet dynamically query every detected telemetry backend
+- some findings are still Kubernetes-native rather than full cross-signal correlation
+- absence of evidence is not proof of absence
+
+In other words: this project is already designed to avoid shallow hardcoded advice, but it is still evolving toward deeper multi-backend runtime analysis.
+
+## Development
+
+Run tests:
+
+```bash
+GOCACHE=/tmp/gocache go test ./...
+```
+
+Lint:
 
 ```bash
 make lint
 ```
 
-## Releases (binaries + container + SBOM + signing)
+## Release notes
 
-Tagging `vX.Y.Z` triggers `.github/workflows/release.yml`:
+Tagging `vX.Y.Z` triggers the release workflow:
 
-- Multi-arch binaries via GoReleaser.
-- GitHub Release assets + checksums.
-- SBOM generation (archives + container image).
-- Keyless `cosign` signing (OIDC) for checksums and the container image.
+- multi-arch binaries via GoReleaser
+- GitHub Release assets and checksums
+- SBOM generation
+- keyless `cosign` signing for checksums and container image

@@ -11,13 +11,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/clusterhealth"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/clusterinfo"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/events"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/pdb"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/resources"
-	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/workloads"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/approval"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/engine"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/exec"
@@ -79,17 +72,13 @@ func NewRemediateCmd() *cobra.Command {
 				return err
 			}
 
-			e := engine.Engine{Analyzers: []analyzer.Analyzer{
-				&clusterinfo.Analyzer{Client: kclient},
-				&clusterhealth.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces, CollectPodLogHints: true, MaxPodLogHints: 3, PodLogTailLines: 200},
-				&events.Analyzer{Client: kclient, Since: f.EventsSince},
-				&workloads.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
-				&resources.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
-				&pdb.Analyzer{Client: kclient, IncludeSystemNamespaces: f.IncludeSystemNamespaces},
-			}}
+			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, kclient.Kubernetes, f.IncludeSystemNamespaces, f.EventsSince)}
 			results, err := e.Run(ctx)
 			if err != nil {
 				return err
+			}
+			if wr := warningResult(kclient.WarningCollector.Snapshot()); len(wr.Findings) > 0 || len(wr.Evidence) > 0 || len(wr.HiddenRisks) > 0 || len(wr.Recommended.ShortTerm) > 0 {
+				results = append(results, wr)
 			}
 			rep := report.Build(results)
 			repJSON, err := json.Marshal(rep)
@@ -117,7 +106,7 @@ Output format requirements:
 - Then EXACTLY ONE fenced code block labeled json containing either an ExecutionPlan object or null.
 `)
 
-			user := fmt.Sprintf("Here is the deterministic diagnosis report as JSON:\n\n%s\n\nTask:\n1) Provide triage order, likely root causes, and the next read-only verification commands (kubectl + PromQL ideas if monitoring exists).\n2) Provide the single best production remediation (if any).\n\nRules for remediation choice:\n- Only emit an executable plan if evidence supports it in THIS snapshot.\n- If root cause is unclear, emit null and focus on what to verify next.\n- If you propose a restart, justify it with evidence and include post-change verification.\n\nOutput format requirements:\n- First, Markdown.\n- Then a fenced code block: ```json ...``` containing either an ExecutionPlan object or null.\n\nExecutionPlan JSON schema (must match exactly):\n{\n  \"apiVersion\": \"kube-ops-copilot/v1alpha1\",\n  \"kind\": \"ExecutionPlan\",\n  \"createdAt\": \"RFC3339\",\n  \"approvalId\": \"\",\n  \"operation\": {\n    \"type\": \"rollout_restart_deployment|scale_deployment\",\n    \"namespace\": \"...\",\n    \"name\": \"...\",\n    \"replicas\": 3,\n    \"reason\": \"...\"\n  },\n  \"verify\": { \"timeoutSeconds\": 180 }\n}\n\nNotes:\n- For rollout_restart_deployment, omit replicas.\n- For scale_deployment, replicas is required.\n- approvalId must be empty string.\n", string(repJSON))
+			user := fmt.Sprintf("Here is the deterministic diagnosis report as JSON:\n\n%s\n\nTask:\n1) Provide triage order, likely root causes, and the next read-only verification commands.\n2) If telemetry is explicitly confirmed in the report, you may suggest backend-specific verification queries. If not, stay backend-agnostic.\n3) Provide the single best production remediation (if any).\n\nRules for remediation choice:\n- Only emit an executable plan if evidence supports it in THIS snapshot.\n- If root cause is unclear, emit null and focus on what to verify next.\n- If you propose a restart, justify it with evidence and include post-change verification.\n\nOutput format requirements:\n- First, Markdown.\n- Then a fenced code block: ```json ...``` containing either an ExecutionPlan object or null.\n\nExecutionPlan JSON schema (must match exactly):\n{\n  \"apiVersion\": \"kube-ops-copilot/v1alpha1\",\n  \"kind\": \"ExecutionPlan\",\n  \"createdAt\": \"RFC3339\",\n  \"approvalId\": \"\",\n  \"operation\": {\n    \"type\": \"rollout_restart_deployment|scale_deployment\",\n    \"namespace\": \"...\",\n    \"name\": \"...\",\n    \"replicas\": 3,\n    \"reason\": \"...\"\n  },\n  \"verify\": { \"timeoutSeconds\": 180 }\n}\n\nNotes:\n- For rollout_restart_deployment, omit replicas.\n- For scale_deployment, replicas is required.\n- approvalId must be empty string.\n", string(repJSON))
 
 			resp, err := client.Complete(ctx, llm.Request{System: system, User: user, Model: f.Model, Temperature: f.Temperature})
 			if err != nil {
@@ -135,6 +124,9 @@ Output format requirements:
 
 			if plan == nil {
 				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\n(no executable plan proposed for this snapshot)")
+				if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot remediate", truncateForTelegram(md, 3500)); err != nil {
+					return err
+				}
 				if !f.ApprovalOnNull {
 					return nil
 				}
@@ -176,6 +168,9 @@ Output format requirements:
 				}
 
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\napproval requested (no plan): provider=%s approval-id=%s\n", approvalProvider, approvalID)
+				if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot remediate (approval requested)", truncateForTelegram(fmt.Sprintf("approvalId=%s provider=%s operation=review_report target=%s\n\n%s", approvalID, approvalProvider, target, details), 3500)); err != nil {
+					return err
+				}
 
 				if approvalProvider != string(approval.ProviderManual) {
 					if f.WaitApproval {
@@ -245,6 +240,9 @@ Output format requirements:
 
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\napproval requested: provider=%s approval-id=%s\n", approvalProvider, approvalID)
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "plan written: %s\n", planPath)
+			if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot remediate (approval requested)", truncateForTelegram(fmt.Sprintf("approvalId=%s provider=%s op=%s target=%s/%s\nplan=%s", approvalID, approvalProvider, plan.Operation.Type, plan.Operation.Namespace, plan.Operation.Name, planPath), 3500)); err != nil {
+				return err
+			}
 
 			if approvalProvider != string(approval.ProviderManual) {
 				if f.WaitApproval {
@@ -262,7 +260,7 @@ Output format requirements:
 			}
 
 			// Extra safety: manual provider requires explicit --approve flag via execute; here we still keep apply gated by provider approval.
-			ex := exec.Executor{Client: kclient}
+			ex := exec.Executor{Client: kclient.Kubernetes}
 			res, err := ex.Apply(ctx, *plan)
 			if err != nil {
 				return err
@@ -304,4 +302,15 @@ Output format requirements:
 	cmd.Flags().BoolVar(&f.Notify, "notify", false, "Send a notification (Slack/Telegram via env vars)")
 
 	return cmd
+}
+
+func sendRemediateNotification(ctx context.Context, enabled bool, title, body string) error {
+	if !enabled {
+		return nil
+	}
+	n := notify.NewFromConfig(notify.FromEnv())
+	if n == nil {
+		return fmt.Errorf("--notify set but no notifier configured; set KUBE_OPS_COPILOT_N8N_WEBHOOK_URL and/or KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL and/or KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN + KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID")
+	}
+	return n.Send(ctx, notify.Message{Title: title, Body: strings.TrimSpace(body)})
 }

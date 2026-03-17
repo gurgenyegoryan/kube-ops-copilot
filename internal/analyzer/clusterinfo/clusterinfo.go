@@ -81,18 +81,18 @@ func (a *Analyzer) Run(ctx context.Context) (analyzer.Result, error) {
 		res.Evidence = append(res.Evidence, model.Evidence{Signal: fmt.Sprintf("node kernel versions: %s", formatCountMap(kernels, 6))})
 	}
 
-	// Metrics API (metrics-server) presence
+	// Resource metrics API presence
 	if _, err := a.Client.Discovery().ServerResourcesForGroupVersion("metrics.k8s.io/v1beta1"); err != nil {
-		res.Evidence = append(res.Evidence, model.Evidence{Signal: "metrics.k8s.io API not detected (metrics-server likely missing or not registered)"})
-		res.Unknowns = append(res.Unknowns, "CPU/memory sizing and saturation checks require a metrics pipeline (metrics-server and/or Prometheus)")
+		res.Evidence = append(res.Evidence, model.Evidence{Signal: "metrics.k8s.io API not detected (resource metrics pipeline not confirmed)"})
+		res.Unknowns = append(res.Unknowns, "CPU/memory sizing and saturation checks require a confirmed resource-metrics pipeline.")
 	} else {
 		res.Evidence = append(res.Evidence, model.Evidence{Signal: "metrics.k8s.io API detected"})
 	}
 
-	// Prometheus / monitoring detection (best-effort)
+	// Time-series monitoring detection (best-effort)
 	groups, err := a.Client.Discovery().ServerGroups()
 	if err != nil {
-		res.Unknowns = append(res.Unknowns, fmt.Sprintf("unable to query server API groups (for monitoring detection): %v", err))
+		res.Unknowns = append(res.Unknowns, fmt.Sprintf("unable to query server API groups (for telemetry discovery): %v", err))
 		return res, nil
 	}
 
@@ -105,9 +105,9 @@ func (a *Analyzer) Run(ctx context.Context) (analyzer.Result, error) {
 	}
 
 	if operatorDetected {
-		res.Evidence = append(res.Evidence, model.Evidence{Signal: "Prometheus Operator API group detected (monitoring.coreos.com)"})
+		res.Evidence = append(res.Evidence, model.Evidence{Signal: "time-series monitoring operator API group detected (monitoring.coreos.com)"})
 	} else {
-		// fall back to a light heuristic: look in common namespaces for pods with prometheus/grafana/alertmanager in name
+		// fall back to a light heuristic: look in common namespaces for common telemetry/dashboard pod names
 		candidates := []string{"monitoring", "observability"}
 		found := []string{}
 		for _, ns := range candidates {
@@ -117,7 +117,7 @@ func (a *Analyzer) Run(ctx context.Context) (analyzer.Result, error) {
 			}
 			for _, p := range pods.Items {
 				name := strings.ToLower(p.Name)
-				if strings.Contains(name, "prometheus") || strings.Contains(name, "grafana") || strings.Contains(name, "alertmanager") {
+				if strings.Contains(name, "prometheus") || strings.Contains(name, "grafana") || strings.Contains(name, "alertmanager") || strings.Contains(name, "victoria") || strings.Contains(name, "thanos") {
 					found = append(found, fmt.Sprintf("%s/%s", ns, p.Name))
 					if len(found) >= 5 {
 						break
@@ -129,17 +129,17 @@ func (a *Analyzer) Run(ctx context.Context) (analyzer.Result, error) {
 			}
 		}
 		if len(found) > 0 {
-			res.Evidence = append(res.Evidence, model.Evidence{Signal: fmt.Sprintf("monitoring pods detected (heuristic): %s", strings.Join(found, ", "))})
+			res.Evidence = append(res.Evidence, model.Evidence{Signal: fmt.Sprintf("telemetry/dashboard pods detected (heuristic): %s", strings.Join(found, ", "))})
 		} else {
-			res.Evidence = append(res.Evidence, model.Evidence{Signal: "Prometheus/monitoring stack not detected (best-effort heuristic)"})
-			res.Unknowns = append(res.Unknowns, "Time-series monitoring not confirmed; validate Prometheus/Grafana availability to support SLO-driven debugging")
+			res.Evidence = append(res.Evidence, model.Evidence{Signal: "time-series monitoring stack not detected (best-effort heuristic)"})
+			res.Unknowns = append(res.Unknowns, "Time-series telemetry is not confirmed; validate what monitoring backend exists to support SLO-driven debugging.")
 		}
 	}
 
 	res.Recommended.Preventive = append(res.Recommended.Preventive, model.Action{
-		Title:               "Ensure cluster has metrics and alerting coverage (metrics-server + time-series monitoring)",
+		Title:               "Ensure cluster has confirmed metrics and alerting coverage",
 		ExpectedBenefit:     "Enables evidence-based triage (resource saturation, latency/error trends) and reduces guesswork during incidents.",
-		RiskTradeoff:        "Operational overhead of running and maintaining monitoring components.",
+		RiskTradeoff:        "Operational overhead of running and maintaining telemetry components.",
 		Priority:            "P2",
 		ExecutionSafety:     model.SafetyNeedsOperatorApproval,
 		ApprovalRequirement: model.ApprovalNeedsOperator,

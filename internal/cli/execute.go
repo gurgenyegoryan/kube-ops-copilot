@@ -90,7 +90,7 @@ func NewExecuteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ex := exec.Executor{Client: client}
+			ex := exec.Executor{Client: client.Kubernetes}
 			result, err := ex.Apply(ctx, plan)
 			if err != nil {
 				return err

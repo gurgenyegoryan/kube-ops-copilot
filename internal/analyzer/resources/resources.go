@@ -136,7 +136,7 @@ func (a *Analyzer) Run(ctx context.Context) (analyzer.Result, error) {
 				{Signal: "Need runtime metrics (CPU/memory, latency, restarts) to size requests and validate probes"},
 			},
 			WhatToVerifyNext: []string{
-				"Check container p95 CPU/memory and throttling/oom trends in Prometheus",
+				"Check container p95 CPU/memory and throttling/OOM trends in the cluster's confirmed metrics backend",
 				"Validate readiness/liveness semantics with dependency graphs and startup time",
 			},
 		})
