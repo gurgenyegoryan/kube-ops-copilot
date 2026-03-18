@@ -202,7 +202,7 @@ Requirements:
 				return err
 			}
 			md := strings.TrimSpace(stripJSONPlanBlock(resp.Text))
-			progress.Printf(md)
+			progress.Printf("%s", md)
 
 			plan, err := extractAndValidateTerraformPRPlan(resp.Text)
 			if err != nil {

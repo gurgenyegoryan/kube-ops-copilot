@@ -1,0 +1,72 @@
+{
+  "generatedAt": "2026-03-18T10:10:00Z",
+  "executiveSummary": "The cluster may be operational, but telemetry coverage is not confirmed enough for high-confidence production suggestions.",
+  "assessment": {
+    "productionReadinessScore": 58,
+    "operationalRisk": "medium",
+    "automationConfidence": "low",
+    "observabilityCoverage": "unconfirmed",
+    "confidenceLimiters": [
+      "Telemetry coverage is not confirmed enough for high-confidence trend analysis.",
+      "There are unresolved unknowns in the current snapshot."
+    ],
+    "topRiskThemes": [
+      "platform/observability",
+      "policies/namespaces",
+      "workloads/autoscaling"
+    ]
+  },
+  "keyFindings": [
+    {
+      "title": "Cluster observability coverage is not confirmed from discovery signals",
+      "severity": "medium",
+      "urgency": "today",
+      "confidence": "high",
+      "affectedScope": "platform/observability",
+      "whyItMatters": "Without confirmed metric and log collection paths, the agent can detect Kubernetes symptoms but cannot make high-confidence claims about saturation, latency, or pre-incident drift.",
+      "automationSuitability": "advisory_only"
+    },
+    {
+      "title": "3 active namespace(s) missing both ResourceQuota and LimitRange",
+      "severity": "medium",
+      "urgency": "this week",
+      "confidence": "high",
+      "affectedScope": "policies/namespaces",
+      "whyItMatters": "Namespaces without policy defaults accumulate noisy-neighbor risk and make safe multi-team operations harder.",
+      "automationSuitability": "advisory_only"
+    }
+  ],
+  "evidence": [
+    {
+      "signal": "capability inventory: time_series_metrics=not_confirmed logs_backend=not_confirmed telemetry_pipeline=candidate"
+    },
+    {
+      "signal": "policy coverage analysis: activeNamespaces=3 missingQuotaAndLimitRange=3 missingNetworkPolicy=3"
+    }
+  ],
+  "likelyRootCauseHypotheses": [],
+  "recommendedActions": {
+    "immediate": [],
+    "shortTerm": [
+      {
+        "title": "Confirm real metrics and log collection coverage before trusting production trend analysis",
+        "expectedBenefit": "Raises confidence in future suggestions and incident triage.",
+        "riskTradeoff": "May reveal additional platform gaps that require follow-up work.",
+        "priority": "P1",
+        "executionSafety": "needs_operator_approval",
+        "approvalRequirement": "needs_operator_approval",
+        "rollbackOutline": "No rollback needed for read-only verification."
+      }
+    ],
+    "preventive": []
+  },
+  "proposedOperatorMessage": "Kube Ops Copilot: cluster observability coverage is not confirmed, so current production suggestions should be treated as lower-confidence until metrics/log paths are verified.",
+  "hiddenRisks": [
+    "A visually healthy cluster can still be operationally blind when telemetry collection is missing or only partially deployed."
+  ],
+  "unknowns": [
+    "No confirmed time-series backend query path.",
+    "No confirmed centralized log backend query path."
+  ],
+  "finalOperatorVerdict": "Treat this as a visibility gap first: confirm telemetry, then trust higher-confidence automation."
+}

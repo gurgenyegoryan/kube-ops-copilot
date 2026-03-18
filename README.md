@@ -24,6 +24,24 @@ This project is designed to do the opposite.
 
 It first discovers what is actually visible in the cluster, then adapts its analysis. If a capability is not confirmed, it should say so clearly instead of hallucinating advice around tools that may not exist.
 
+## Why People Switch From Generic AI To This
+
+Generic AI Kubernetes answers often sound confident but miss the operational reality:
+
+- they assume tooling that may not exist in your cluster
+- they jump to “restart the pod” before separating symptom from cause
+- they do not distinguish safe automation from approval-gated change
+- they do not know when the right fix belongs in GitOps/Terraform instead of a live patch
+- they rarely leave an audit trail that an SRE team would actually trust
+
+Kube Ops Copilot is built for the opposite workflow:
+
+- discover first, assume nothing
+- explain confidence and confidence limiters explicitly
+- propose the smallest safe remediation only when evidence supports it
+- switch between live remediation and infrastructure PR mode based on the real fix path
+- keep outputs shareable: operator message, execution plan, PR body, rollback notes, and verification checklist
+
 ## Core principles
 
 - Evidence-first: every finding should be grounded in observed Kubernetes state.
@@ -162,8 +180,22 @@ Long-running commands now show live progress in the terminal.
 
 - interactive terminals get a single refreshing status line
 - long phases such as cluster analysis, LLM planning, approval waiting, validation, git push, and PR creation update in place
+- the terminal now keeps a rolling activity feed under the live status line, so you can see what the agent is doing in the background instead of waiting on a silent spinner
 - durable events like approval ids, plan paths, and final results are still printed as normal lines
 - infra planning flows also write a repo inventory snapshot to `/tmp`, so when a Terraform PR plan is `null` you can inspect exactly what files and links the agent analyzed
+
+### Demo fixtures and golden outputs
+
+Launch-ready examples live in [examples/demo-fixtures](/home/gurgen/projects/personal/k8s-aiagent/examples/demo-fixtures/README.md).
+
+They include:
+
+- 4 production-style scenario fixtures
+- golden `diagnose` Markdown output
+- golden `suggest` response with fenced execution plan
+- golden `terraform-pr` response with fenced infra PR plan
+
+These fixtures are also covered by tests and benchmarks so they stay useful as the project evolves.
 
 ### 1. Deterministic diagnosis
 

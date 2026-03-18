@@ -1,0 +1,107 @@
+{
+  "generatedAt": "2026-03-18T10:00:00Z",
+  "executiveSummary": "Exposed single-replica Grafana without autoscaling is the clearest availability risk in this snapshot.",
+  "assessment": {
+    "productionReadinessScore": 71,
+    "operationalRisk": "high",
+    "automationConfidence": "medium",
+    "observabilityCoverage": "confirmed",
+    "confidenceLimiters": [
+      "Probe behavior still needs workload-specific validation before any rollout.",
+      "Runtime telemetry is confirmed, but root-cause verification still needs live metrics and events."
+    ],
+    "topRiskThemes": [
+      "workloads/autoscaling",
+      "workloads/probes"
+    ]
+  },
+  "keyFindings": [
+    {
+      "title": "Exposed single-replica workload without HPA: gosell-test/prometheus-grafana",
+      "severity": "high",
+      "urgency": "today",
+      "confidence": "high",
+      "affectedScope": "workloads/autoscaling",
+      "whyItMatters": "A single exposed pod is a hard single point of failure during node drains, evictions, or rollout churn.",
+      "automationSuitability": "approval_gated_change"
+    },
+    {
+      "title": "9 container(s) missing readiness/liveness probes",
+      "severity": "medium",
+      "urgency": "this week",
+      "confidence": "high",
+      "affectedScope": "workloads/probes",
+      "whyItMatters": "Without probes, Kubernetes can route traffic to unhealthy pods and self-healing becomes much less reliable.",
+      "automationSuitability": "advisory_only"
+    }
+  ],
+  "evidence": [
+    {
+      "signal": "singleReplicaExposedNoHPA=1 workload=gosell-test/prometheus-grafana"
+    },
+    {
+      "signal": "missing probe(s): deploy gosell-test/prometheus-grafana container=grafana readiness=false liveness=false"
+    },
+    {
+      "signal": "discovered platform API groups: monitoring.coreos.com, metrics.k8s.io"
+    },
+    {
+      "signal": "service exposure inventory: ClusterIP=18 NodePort=0 LoadBalancer=1 ExternalName=0"
+    }
+  ],
+  "likelyRootCauseHypotheses": [
+    {
+      "rank": 1,
+      "description": "The highest current availability risk comes from a statically scaled exposed workload rather than from an active crash loop.",
+      "probability": "high",
+      "supportingEvidence": [
+        {
+          "signal": "singleReplicaExposedNoHPA=1 workload=gosell-test/prometheus-grafana"
+        }
+      ],
+      "contradictoryOrMissingEvidence": [
+        {
+          "signal": "Need service and endpoint verification to confirm current traffic path and readiness."
+        }
+      ],
+      "whatToVerifyNext": [
+        "Confirm the Service selects the Grafana pod and currently has ready endpoints.",
+        "Check whether the Grafana deployment can safely run more than one replica."
+      ]
+    }
+  ],
+  "recommendedActions": {
+    "immediate": [
+      {
+        "title": "Verify Grafana exposure path and scale from 1 to 2 replicas if the workload is stateless enough",
+        "expectedBenefit": "Removes the most obvious single point of failure without depending on probe correctness.",
+        "riskTradeoff": "If the workload has singleton assumptions or storage constraints, scale-out may be unsafe until validated.",
+        "priority": "P1",
+        "executionSafety": "needs_operator_approval",
+        "approvalRequirement": "needs_operator_approval",
+        "rollbackOutline": "Scale back to one replica and revert the deployment spec if multi-replica behavior is not safe."
+      }
+    ],
+    "shortTerm": [],
+    "preventive": [
+      {
+        "title": "Add readiness and liveness probes for the affected workloads after validating endpoints and startup behavior",
+        "expectedBenefit": "Improves safe traffic routing and self-healing.",
+        "riskTradeoff": "Incorrect probes can cause self-inflicted outages during rollout.",
+        "priority": "P2",
+        "executionSafety": "needs_operator_approval",
+        "approvalRequirement": "needs_operator_approval",
+        "rollbackOutline": "Revert or relax probe configuration if rollout stability regresses."
+      }
+    ]
+  },
+  "proposedOperatorMessage": "Kube Ops Copilot: exposed single-replica Grafana without autoscaling is the clearest availability risk in this snapshot. Best next action is to confirm the Service/endpoints path and, if safe, scale to two replicas with operator approval.",
+  "hiddenRisks": [
+    "Probe omission may look harmless during calm periods but increases partial-failure risk during dependency incidents.",
+    "A graceful-looking cluster can still be one node drain away from user-visible downtime when an exposed workload has only one replica."
+  ],
+  "unknowns": [
+    "Grafana multi-replica safety still needs validation against storage/session assumptions."
+  ],
+  "finalOperatorVerdict": "Reduce the exposed Grafana single point of failure first, then address probe gaps as a staged hardening task."
+}

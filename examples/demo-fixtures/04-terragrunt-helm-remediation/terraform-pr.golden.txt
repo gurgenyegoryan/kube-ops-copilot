@@ -1,0 +1,40 @@
+The best durable fix is to remove the single-replica risk in infrastructure code. The Terragrunt stack resolves to the Grafana Helm module and `helm-charts/monitoring/grafana/values-test.yaml`, so the safest PR is a minimal values-file update that raises replicas from 1 to 2.
+
+```json
+{
+  "apiVersion": "kube-ops-copilot/v1alpha1",
+  "kind": "InfraPRPlan",
+  "backend": "terraform",
+  "createdAt": "2026-03-18T10:25:00Z",
+  "approvalId": "",
+  "summary": "Raise Grafana replica count in the test monitoring stack to remove the exposed single-pod risk.",
+  "branchName": "koc/grafana-two-replicas-test",
+  "commitMessage": "Increase Grafana replicas to 2 in test monitoring values",
+  "prTitle": "Increase Grafana replicas to 2 in test monitoring",
+  "prBody": "This PR removes a single-pod availability risk for the exposed Grafana deployment by updating the test values file used by the Terragrunt monitoring stack.",
+  "edits": [
+    {
+      "type": "search_replace",
+      "path": "helm-charts/monitoring/grafana/values-test.yaml",
+      "search": "replicas: 1",
+      "replace": "replicas: 2"
+    }
+  ],
+  "verify": {
+    "commands": [
+      "terragrunt hclfmt --recursive",
+      "terraform fmt --recursive",
+      "terragrunt run-all validate"
+    ],
+    "notes": [
+      "Confirm the Grafana chart and persistence settings support two replicas before merge.",
+      "After the next apply, verify the Grafana Service has two ready endpoints."
+    ]
+  },
+  "metadata": {
+    "resource": "monitoring/grafana",
+    "risk_note": "Safe only if the chart and storage/session model support multiple replicas.",
+    "post_merge_check": "Verify the next apply produces two ready Grafana pods and no PVC/session regressions."
+  }
+}
+```

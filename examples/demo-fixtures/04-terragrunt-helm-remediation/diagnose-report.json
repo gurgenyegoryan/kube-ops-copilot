@@ -1,0 +1,53 @@
+{
+  "generatedAt": "2026-03-18T10:20:00Z",
+  "executiveSummary": "The durable fix belongs in infrastructure code because the exposed Grafana availability risk is best addressed through Terragrunt + Helm values.",
+  "assessment": {
+    "productionReadinessScore": 74,
+    "operationalRisk": "high",
+    "automationConfidence": "medium",
+    "observabilityCoverage": "confirmed",
+    "confidenceLimiters": [
+      "Repo edits must still be reviewed because chart behavior can vary by values file."
+    ],
+    "topRiskThemes": [
+      "workloads/autoscaling",
+      "platform/gitops"
+    ]
+  },
+  "keyFindings": [
+    {
+      "title": "Exposed single-replica workload without HPA: monitoring/grafana",
+      "severity": "high",
+      "urgency": "today",
+      "confidence": "high",
+      "affectedScope": "workloads/autoscaling",
+      "whyItMatters": "A single exposed Grafana pod creates a fragile operational dependency during node drains and upgrades.",
+      "automationSuitability": "approval_gated_change"
+    }
+  ],
+  "evidence": [
+    {
+      "signal": "Terragrunt stack points to modules/monitoring/grafana and values path helm-charts/monitoring/grafana/values-test.yaml"
+    }
+  ],
+  "likelyRootCauseHypotheses": [],
+  "recommendedActions": {
+    "immediate": [],
+    "shortTerm": [
+      {
+        "title": "Raise Grafana replica count in infrastructure code and ship it via PR",
+        "expectedBenefit": "Removes the live single point of failure while preserving GitOps/auditability.",
+        "riskTradeoff": "Requires review to ensure the chart and values file support multi-replica behavior.",
+        "priority": "P1",
+        "executionSafety": "needs_operator_approval",
+        "approvalRequirement": "needs_operator_approval",
+        "rollbackOutline": "Revert the PR or set replica count back to one."
+      }
+    ],
+    "preventive": []
+  },
+  "proposedOperatorMessage": "Kube Ops Copilot: the exposed Grafana single-replica risk is best fixed in Terragrunt/Helm values, not by a direct cluster patch.",
+  "hiddenRisks": [],
+  "unknowns": [],
+  "finalOperatorVerdict": "Prefer infrastructure PR over ad-hoc live edits for this change."
+}
