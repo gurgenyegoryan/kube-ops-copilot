@@ -35,25 +35,34 @@ func NewExecuteCmd() *cobra.Command {
 		Short: "Execute an approved remediation (approval-gated)",
 		Long:  "Execution is disabled by default and requires explicit operator approval flags.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			progress := newLiveProgress(cmd.OutOrStdout(), "execute")
+			defer progress.Close()
 			if f.PlanPath == "" {
+				progress.Failf("missing plan path")
 				return errors.New("refusing to execute: missing --plan")
 			}
+			progress.Updatef("loading execution plan")
 			planPath, err := resolvePlanPath(f.PlanPath)
 			if err != nil {
+				progress.Failf("loading execution plan")
 				return fmt.Errorf("load plan: %w (try --plan ./examples/execute-restart-deployment.json)", err)
 			}
 			plan, err := exec.LoadPlan(planPath)
 			if err != nil {
+				progress.Failf("loading execution plan")
 				return fmt.Errorf("load plan: %w (path=%s)", err, planPath)
 			}
 			if err := plan.Validate(); err != nil {
+				progress.Failf("validating execution plan")
 				return fmt.Errorf("invalid plan: %w", err)
 			}
 
 			if !f.Approve {
+				progress.Failf("explicit approval flag missing")
 				return errors.New("refusing to execute: missing explicit approval (pass --approve)")
 			}
 			if f.ApprovalID == "" {
+				progress.Failf("approval id missing")
 				return errors.New("refusing to execute: missing approval id (pass --approval-id)")
 			}
 			if strings.TrimSpace(plan.ApprovalID) != "" && plan.ApprovalID != f.ApprovalID {
@@ -65,12 +74,15 @@ func NewExecuteCmd() *cobra.Command {
 				provider = string(approval.ProviderManual)
 			}
 			if provider != string(approval.ProviderManual) {
+				progress.Updatef("checking external approval status")
 				if err := ensureApproved(cmd.Context(), provider, f.ApprovalID, f.WaitApproval, f.ApprovalTimeout); err != nil {
+					progress.Failf("approval was not granted")
 					return err
 				}
 			}
 
 			if f.DryRun {
+				progress.Donef("approval validated; no changes executed")
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "dry-run: no changes executed; approval validated (approval-id=%s)\n", f.ApprovalID)
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "plan: op=%s target=%s/%s approval-provider=%s\n", plan.Operation.Type, plan.Operation.Namespace, plan.Operation.Name, provider)
 				if f.Notify {
@@ -86,15 +98,20 @@ func NewExecuteCmd() *cobra.Command {
 			ctx, cancel := contextWithTimeout(cmd, f.Timeout)
 			defer cancel()
 
+			progress.Updatef("connecting to cluster")
 			client, err := kube.NewClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
 			if err != nil {
+				progress.Failf("connecting to cluster")
 				return err
 			}
-			ex := exec.Executor{Client: client.Kubernetes}
+			progress.Updatef("executing approved remediation")
+			ex := exec.Executor{Client: client.Kubernetes, Progress: progress.Updatef}
 			result, err := ex.Apply(ctx, plan)
 			if err != nil {
+				progress.Failf("executing approved remediation")
 				return err
 			}
+			progress.Donef("approved remediation executed")
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "executed: op=%s target=%s verified=%t duration=%s\n", result.Operation, result.Target, result.Verified, result.EndedAt.Sub(result.StartedAt))
 			if f.Notify {
 				n := notify.NewFromConfig(notify.FromEnv())

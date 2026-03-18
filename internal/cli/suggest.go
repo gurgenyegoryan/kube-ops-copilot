@@ -40,29 +40,38 @@ func NewSuggestCmd() *cobra.Command {
 		Short: "Generate human-friendly suggestions (LLM-assisted, read-only)",
 		Long:  "Uses an LLM to turn the deterministic diagnose report into operator-friendly narrative, triage order, and next-step commands. Does not apply changes.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			progress := newLiveProgress(cmd.OutOrStdout(), "suggest")
+			defer progress.Close()
 			provider := llm.Provider(strings.ToLower(strings.TrimSpace(f.Provider)))
 			if provider == "" {
 				provider = llm.ProviderNone
 			}
+			progress.Updatef("initializing LLM client")
 			client, err := llm.New(llm.Config{Provider: provider, Model: f.Model, BaseURL: f.BaseURL, APIKey: f.APIKey})
 			if err != nil {
+				progress.Failf("initializing LLM client")
 				return err
 			}
 			if client == nil {
+				progress.Failf("initializing LLM client")
 				return errors.New("no LLM provider configured (use --llm-provider or set KUBE_OPS_COPILOT_*_API_KEY)")
 			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), f.Timeout)
 			defer cancel()
 
+			progress.Updatef("connecting to cluster")
 			kclient, err := kube.NewClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
 			if err != nil {
+				progress.Failf("connecting to cluster")
 				return err
 			}
 
+			progress.Updatef("running analyzers")
 			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, kclient.Kubernetes, f.IncludeSystemNamespaces, f.EventsSince)}
 			results, err := e.Run(ctx)
 			if err != nil {
+				progress.Failf("running analyzers")
 				return err
 			}
 			if wr := warningResult(kclient.WarningCollector.Snapshot()); len(wr.Findings) > 0 || len(wr.Evidence) > 0 || len(wr.HiddenRisks) > 0 || len(wr.Recommended.ShortTerm) > 0 {
@@ -98,10 +107,13 @@ If no safe executable plan can be proposed from the evidence, output a JSON fenc
 Output professional, concise Markdown.`)
 
 			user := fmt.Sprintf("Here is the deterministic diagnosis report as JSON:\n\n%s\n\nTask:\n1) Act as a production-readiness reviewer for this specific cluster snapshot.\n2) Explain what platform capabilities are explicitly observed, what is not confirmed, and which gaps most limit reliable production suggestions.\n3) Provide triage order, likely root causes, and next read-only verification commands.\n4) Provide the single best production remediation or production-readiness improvement for the current evidence.\n5) Do not recommend Prometheus/Loki/HPA/etc. as if they already exist unless the report explicitly shows them.\n\nOutput format requirements:\n- First, Markdown.\n- Then a fenced code block: ```json ...``` containing either an ExecutionPlan object or null.\n\nExecutionPlan JSON schema (must match exactly):\n{\n  \"apiVersion\": \"kube-ops-copilot/v1alpha1\",\n  \"kind\": \"ExecutionPlan\",\n  \"createdAt\": \"RFC3339\",\n  \"approvalId\": \"\",\n  \"operation\": {\n    \"type\": \"rollout_restart_deployment|scale_deployment\",\n    \"namespace\": \"...\",\n    \"name\": \"...\",\n    \"replicas\": 3,\n    \"reason\": \"...\"\n  },\n  \"verify\": { \"timeoutSeconds\": 180 }\n}\n\nNotes:\n- For rollout_restart_deployment, omit replicas.\n- For scale_deployment, replicas is required.\n- approvalId must be empty string.\n- If the best recommendation is not one of the allowed plan types, emit null in the JSON block and keep the recommendation in Markdown only.\n", string(repJSON))
+			progress.Updatef("asking LLM for operator suggestions")
 			resp, err := client.Complete(ctx, llm.Request{System: system, User: user, Model: f.Model, Temperature: f.Temperature})
 			if err != nil {
+				progress.Failf("asking LLM for operator suggestions")
 				return err
 			}
+			progress.Close()
 
 			if strings.TrimSpace(f.PlanOut) != "" {
 				p, err := extractAndValidatePlan(resp.Text)
@@ -127,8 +139,12 @@ Output professional, concise Markdown.`)
 				}
 
 				if f.Notify {
+					progress = newLiveProgress(cmd.OutOrStdout(), "suggest")
+					defer progress.Close()
+					progress.Updatef("sending notification")
 					n := notify.NewFromConfig(notify.FromEnv())
 					if n == nil {
+						progress.Failf("sending notification")
 						return fmt.Errorf("--notify set but no notifier configured; set KUBE_OPS_COPILOT_N8N_WEBHOOK_URL and/or KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL and/or KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN + KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID")
 					}
 					body := truncateForTelegram(text, 3500)
@@ -136,6 +152,7 @@ Output professional, concise Markdown.`)
 						body = strings.TrimSpace(body + "\n\nplan: " + strings.TrimSpace(f.PlanOut))
 					}
 					_ = n.Send(ctx, notify.Message{Title: "kube-ops-copilot suggest", Body: body})
+					progress.Donef("notification sent")
 				}
 				return nil
 			}
@@ -143,12 +160,17 @@ Output professional, concise Markdown.`)
 			out := strings.TrimSpace(resp.Text)
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), out)
 			if f.Notify {
+				progress = newLiveProgress(cmd.OutOrStdout(), "suggest")
+				defer progress.Close()
+				progress.Updatef("sending notification")
 				n := notify.NewFromConfig(notify.FromEnv())
 				if n == nil {
+					progress.Failf("sending notification")
 					return fmt.Errorf("--notify set but no notifier configured; set KUBE_OPS_COPILOT_N8N_WEBHOOK_URL and/or KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL and/or KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN + KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID")
 				}
 				text := strings.TrimSpace(stripJSONPlanBlock(out))
 				_ = n.Send(ctx, notify.Message{Title: "kube-ops-copilot suggest", Body: truncateForTelegram(text, 3500)})
+				progress.Donef("notification sent")
 			}
 			return nil
 		},

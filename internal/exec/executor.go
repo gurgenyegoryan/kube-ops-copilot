@@ -12,7 +12,8 @@ import (
 )
 
 type Executor struct {
-	Client *kubernetes.Clientset
+	Client   *kubernetes.Clientset
+	Progress func(string, ...any)
 }
 
 type Result struct {
@@ -34,9 +35,11 @@ func (e *Executor) Apply(ctx context.Context, plan Plan) (Result, error) {
 	started := time.Now()
 	switch plan.Operation.Type {
 	case OpRolloutRestartDeployment:
+		e.progress("patching deployment for rollout restart")
 		if err := e.rolloutRestartDeployment(ctx, plan.Operation.Namespace, plan.Operation.Name); err != nil {
 			return Result{}, err
 		}
+		e.progress("verifying deployment rollout")
 		verified, err := e.verifyDeploymentRollout(ctx, plan.Operation.Namespace, plan.Operation.Name, plan.Verify.TimeoutSeconds)
 		if err != nil {
 			return Result{}, err
@@ -53,9 +56,11 @@ func (e *Executor) Apply(ctx context.Context, plan Plan) (Result, error) {
 		if plan.Operation.Replicas != nil {
 			replicas = *plan.Operation.Replicas
 		}
+		e.progress("patching deployment scale to %d", replicas)
 		if err := e.scaleDeployment(ctx, plan.Operation.Namespace, plan.Operation.Name, replicas); err != nil {
 			return Result{}, err
 		}
+		e.progress("verifying deployment rollout")
 		verified, err := e.verifyDeploymentRollout(ctx, plan.Operation.Namespace, plan.Operation.Name, plan.Verify.TimeoutSeconds)
 		if err != nil {
 			return Result{}, err
@@ -69,6 +74,12 @@ func (e *Executor) Apply(ctx context.Context, plan Plan) (Result, error) {
 		}, nil
 	default:
 		return Result{}, fmt.Errorf("unsupported operation type: %q", plan.Operation.Type)
+	}
+}
+
+func (e *Executor) progress(format string, args ...any) {
+	if e.Progress != nil {
+		e.Progress(format, args...)
 	}
 }
 

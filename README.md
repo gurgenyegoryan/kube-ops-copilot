@@ -147,6 +147,12 @@ docker pull ghcr.io/<org>/<repo>:vX.Y.Z
 
 ## Quick start
 
+Long-running commands now show live progress in the terminal.
+
+- interactive terminals get a single refreshing status line
+- long phases such as cluster analysis, LLM planning, approval waiting, validation, git push, and PR creation update in place
+- durable events like approval ids, plan paths, and final results are still printed as normal lines
+
 ### 1. Deterministic diagnosis
 
 ```bash
@@ -290,12 +296,20 @@ Push branch and open PR:
 
 Important:
 
-- this mode is Terraform-only in the current version
+- this mode is Terraform-first, and the generic infra layer also supports `opentofu` and `terragrunt` plans
 - it edits only files present in the sampled repo inventory sent to the LLM
-- edits are applied as exact literal search/replace operations
+- repo narrowing is dependency-aware: the inventory now includes detected stacks, local module sources, terragrunt dependencies/includes, and higher-scored candidate files
+- local reference expansion is layout-agnostic: when wrapper files point to chart paths, values files, templates, manifests, Helmfile/Kustomize targets, shell entrypoints, or other repo-local targets, the inventory tries to pull those linked files in automatically instead of stopping at the wrapper layer
+- HCL resolution is now hybrid: the agent first tries a real HCL2 parser/evaluator layer for `locals`, `include`, `dependency`, `source`, and path-like attributes, then falls back to heuristics only when structural evaluation is inconclusive
+- Terragrunt evaluation goes deeper than raw string parsing: the resolver now understands `read_terragrunt_config(...)` and can carry `locals` and `inputs` through chained config files when that is required to find real chart paths or `values-<env>.yaml` files
+- the repo graph is multi-file, not HCL-only: it also follows Helm charts, Helmfile, Kustomize overlays, raw Kubernetes YAML, and command-style references such as `kubectl -f/-k`, `helm -f`, and `kustomize build`
+- repo narrowing is also semantic, not only structural: cluster findings like namespace/workload names are turned into environment and workload aliases so the inventory can prioritize files such as `environments/test/...`, `modules/.../prometheus`, or `helm-charts/temporalio/...` even in unfamiliar layouts
+- it prefers HCL-aware edits like `hcl_set_attribute`, `hcl_delete_attribute`, `hcl_replace_block`, and `hcl_append_block_body`, with literal search/replace kept as fallback
+- HCL-aware attribute updates are multiline-friendly, so the executor can safely replace nested maps/lists instead of only one-line scalar values
 - by default it refuses to work in a dirty git repo
 - it does not run `terraform apply`
-- `terraform validate` is optional because many repos need backend/module init or wrapper tooling
+- validation is backend-aware: Terraform/OpenTofu validate changed module directories, and Terragrunt uses `hclvalidate` plus `validate-inputs` where a local stack is detected
+- generated PR bodies include a change summary, changed files, verification steps, risk matrix, post-merge checklist, and rollback guidance
 
 Useful flags:
 
@@ -307,7 +321,165 @@ Useful flags:
 - `--require-clean-repo`
 - `--plan-out`
 
-### 5. Execute an approved plan manually
+### 5. Smart unified remediation
+
+`smart-remediate` is the command that chooses the remediation path:
+
+- live Kubernetes action via `ExecutionPlan`
+- infra pull request via `InfraPRPlan`
+- or `null` if neither is justified
+
+Example:
+
+```bash
+./kube-ops-copilot smart-remediate \
+  --llm-provider openai \
+  --llm-model gpt-5.2 \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --infra-repo-path ~/infra/live/prod \
+  --approval-provider n8n \
+  --wait-approval \
+  --apply \
+  --git-push \
+  --open-pr \
+  --base-branch main
+```
+
+Use this when you want the agent to decide whether the right fix is:
+
+- an immediate cluster change
+- a GitOps/Terraform PR
+- a compound plan: immediate live mitigation plus durable infra PR
+- or investigation only
+
+When a compound plan is applied, the tool also writes a lightweight orchestration trace next to the plan file:
+
+- `<plan>.compound-result.json` records phase state for `live` and `infra`
+- each phase has `pending`, `running`, `succeeded`, `failed`, or `skipped`
+- this makes it easier to understand whether the live mitigation succeeded before the repo branch/PR step started
+
+### 6. Infra execute and status
+
+You can also execute or inspect an infra plan directly.
+
+Execute an approved infra plan:
+
+```bash
+./kube-ops-copilot infra execute \
+  --plan /tmp/kube-ops-copilot-terraform-plan.json \
+  --infra-repo-path ~/infra/live/prod \
+  --approval-provider n8n \
+  --approval-id APPROVAL-123 \
+  --wait-approval \
+  --apply \
+  --git-push \
+  --open-pr
+```
+
+Inspect local status:
+
+```bash
+./kube-ops-copilot infra status \
+  --plan /tmp/kube-ops-copilot-terraform-plan.json \
+  --infra-repo-path ~/infra/live/prod
+```
+
+## Infra planning details
+
+The infrastructure planning path is intentionally conservative.
+
+### Dependency-aware repo narrowing
+
+Before the LLM is asked to propose a repo change, the tool builds a repo inventory that tries to answer:
+
+- which files look most relevant to the current cluster findings
+- which directories behave like stacks
+- which Terraform modules point at local sources
+- which Terragrunt files reference other stacks via `dependency`, `include`, or `terraform.source`
+- which Terragrunt configs compute their final targets through chained `locals`, `inputs`, and `read_terragrunt_config(...)`
+- which local path/file/chart/values references lead to the actual editable YAML, Helm, Helmfile, Kustomize, or template files
+- which shell or CI entrypoints point at those same files through `kubectl`, `helm`, `helmfile`, `kustomize`, `terraform`, `tofu`, or `terragrunt` commands
+- which repo paths are semantically close to the live cluster findings based on workload names, namespaces, and inferred environment names
+
+That inventory is then sampled and sent to the model instead of dumping the entire repository blindly.
+
+### Supported HCL-aware edit types
+
+Current structured edit types:
+
+- `hcl_set_attribute`
+- `hcl_delete_attribute`
+- `hcl_replace_block`
+- `hcl_append_block_body`
+- `search_replace` as fallback
+
+These are intended for precise repo updates such as:
+
+- changing replica defaults in a module
+- removing an unsafe attribute
+- replacing a whole resource or module block
+- appending a lifecycle stanza, tags block, or nested configuration block
+
+Example `InfraPRPlan` snippet:
+
+```json
+{
+  "kind": "InfraPRPlan",
+  "backend": "terraform",
+  "summary": "Raise Grafana replica count in the prod monitoring module",
+  "edits": [
+    {
+      "type": "hcl_set_attribute",
+      "path": "monitoring/grafana.tf",
+      "blockType": "module",
+      "labels": ["grafana"],
+      "attribute": "replicas",
+      "valueHCL": "2"
+    }
+  ]
+}
+```
+
+For nested expressions, `valueHCL` may also be multiline HCL:
+
+```hcl
+{
+  enabled = true
+  paths = [
+    "/readyz",
+    "/healthz",
+  ]
+}
+```
+
+### Backend-aware validation behavior
+
+The executor validates differently depending on the chosen backend:
+
+- Terraform: `terraform fmt -recursive` plus `terraform validate` in changed module directories when possible
+- OpenTofu: `tofu fmt -recursive` plus `tofu validate`
+- Terragrunt: `terragrunt hclfmt`, then `terragrunt hclvalidate` and `terragrunt validate-inputs` in changed stack directories
+
+This is intentionally more wrapper-aware than a single repo-root validate command, but still conservative enough to avoid assuming a custom wrapper that may not exist.
+
+### Smarter PR generation
+
+Generated PR bodies now try to be operator-friendly, not just git-friendly.
+
+They include:
+
+- the requested change summary
+- changed files
+- verification checklist
+- verification notes
+- risk matrix
+- post-merge checklist
+- rollback guidance
+
+This makes the PR readable for platform engineers who were not present when the remediation was proposed.
+
+### 7. Execute an approved plan manually
 
 Execution is dry-run by default.
 
@@ -534,9 +706,10 @@ Current limitations are important:
 - the tool does not yet dynamically query every detected telemetry backend
 - some findings are still Kubernetes-native rather than full cross-signal correlation
 - absence of evidence is not proof of absence
-- Terraform PR mode currently supports only exact search/replace edits
-- Terraform PR mode assumes plain `git`, optional `gh`, and plain `terraform` workflows
+- HCL-aware edits currently focus on setting top-level block attributes and still fall back to literal search/replace for harder cases
+- Terraform PR mode assumes plain `git`, optional `gh`, and plain `terraform` / `tofu` / `terragrunt` workflows
 - very large or indirect Terraform repos may require passing a narrower `--infra-repo-path`
+- compound remediation is supported, but only as a sequential live-then-infra flow inside one plan
 
 In other words: this project is already designed to avoid shallow hardcoded advice, but it is still evolving toward deeper multi-backend runtime analysis.
 
