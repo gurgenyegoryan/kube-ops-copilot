@@ -99,6 +99,9 @@ func NewSmartRemediateCmd() *cobra.Command {
 					return err
 				}
 				repoInventory = inv
+				if path, err := writeTextArtifact("kube-ops-copilot-infra-inventory", inv); err == nil {
+					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "infrastructure repo inventory snapshot: %s\n", path)
+				}
 			}
 
 			system := strings.TrimSpace(`You are Kube Ops Copilot in unified remediation mode.

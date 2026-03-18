@@ -21,4 +21,10 @@ func TestBuildSortsBySeverity(t *testing.T) {
 	if r.KeyFindings[0].Severity != model.SeverityCritical {
 		t.Fatalf("expected critical first")
 	}
+	if r.Assessment.OperationalRisk != model.SeverityCritical {
+		t.Fatalf("expected critical operational risk, got %s", r.Assessment.OperationalRisk)
+	}
+	if r.Assessment.ProductionReadinessScore >= 100 {
+		t.Fatalf("expected score to decrease when findings exist")
+	}
 }

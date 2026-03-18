@@ -19,6 +19,7 @@ func TestMarkdownIncludesRequiredSections(t *testing.T) {
 
 	req := []string{
 		"### Executive Summary",
+		"### Snapshot Assessment",
 		"### Key Findings",
 		"### Evidence",
 		"### Likely Root Cause Hypotheses",

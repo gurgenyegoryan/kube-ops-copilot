@@ -105,7 +105,7 @@ func NewExecuteCmd() *cobra.Command {
 				return err
 			}
 			progress.Updatef("executing approved remediation")
-			ex := exec.Executor{Client: client.Kubernetes, Progress: progress.Updatef}
+			ex := exec.Executor{Client: client.Kubernetes, Progress: progress.Eventf}
 			result, err := ex.Apply(ctx, plan)
 			if err != nil {
 				progress.Failf("executing approved remediation")

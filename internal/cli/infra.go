@@ -99,7 +99,7 @@ func newInfraExecuteCmd(f *infraFlags) *cobra.Command {
 				OpenPR:       f.OpenPR,
 				BaseBranch:   f.BaseBranch,
 				RequireClean: f.RequireClean,
-				Progress:     progress.Updatef,
+				Progress:     progress.Eventf,
 			}
 			result, err := ex.Apply(ctx, plan)
 			if err != nil {

@@ -90,7 +90,7 @@ func NewTerraformPRCmd() *cobra.Command {
 				return err
 			}
 			progress.Updatef("running analyzers")
-			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, kclient.Kubernetes, f.IncludeSystemNamespaces, f.EventsSince)}
+			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, kclient.Kubernetes, f.IncludeSystemNamespaces, f.EventsSince), Progress: progress.Eventf}
 			results, err := e.Run(ctx)
 			if err != nil {
 				progress.Failf("running analyzers")
@@ -110,6 +110,10 @@ func NewTerraformPRCmd() *cobra.Command {
 			if err != nil {
 				progress.Failf("building infrastructure repository inventory")
 				return err
+			}
+			inventoryPath, err := writeTextArtifact("kube-ops-copilot-infra-inventory", repoInventory)
+			if err == nil {
+				progress.Printf("infrastructure repo inventory snapshot: %s", inventoryPath)
 			}
 
 			system := strings.TrimSpace(`You are Kube Ops Copilot in Terraform PR mode.
@@ -292,7 +296,7 @@ Requirements:
 				OpenPR:       f.OpenPR,
 				BaseBranch:   f.BaseBranch,
 				RequireClean: f.RequireClean,
-				Progress:     progress.Updatef,
+				Progress:     progress.Eventf,
 			}
 			result, err := ex.Apply(ctx, *plan)
 			if err != nil {

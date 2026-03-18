@@ -62,6 +62,17 @@ Current examples:
 
 This architecture is intended to grow. The point is that the agent should not be locked to a single observability stack or platform pattern.
 
+Every report now also carries a heuristic snapshot assessment:
+
+- production readiness score
+- operational risk
+- automation confidence
+- observability coverage status
+- confidence limiters
+- top risk themes
+
+This is meant to make each run easier to trust and easier to share with operators or stakeholders.
+
 ## What the tool tries to discover automatically
 
 The discovery stage builds a capability inventory with states like:
@@ -152,6 +163,7 @@ Long-running commands now show live progress in the terminal.
 - interactive terminals get a single refreshing status line
 - long phases such as cluster analysis, LLM planning, approval waiting, validation, git push, and PR creation update in place
 - durable events like approval ids, plan paths, and final results are still printed as normal lines
+- infra planning flows also write a repo inventory snapshot to `/tmp`, so when a Terraform PR plan is `null` you can inspect exactly what files and links the agent analyzed
 
 ### 1. Deterministic diagnosis
 

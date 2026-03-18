@@ -35,6 +35,25 @@ func Markdown(r model.Report) string {
 	b := &strings.Builder{}
 
 	fmt.Fprintf(b, "### Executive Summary\n%s\n\n", strings.TrimSpace(r.ExecutiveSummary))
+	fmt.Fprintf(b, "### Snapshot Assessment\n")
+	fmt.Fprintf(b, "- production readiness score: %d/100\n", r.Assessment.ProductionReadinessScore)
+	fmt.Fprintf(b, "- operational risk: %s\n", r.Assessment.OperationalRisk)
+	fmt.Fprintf(b, "- automation confidence: %s\n", r.Assessment.AutomationConfidence)
+	fmt.Fprintf(b, "- observability coverage: %s\n", r.Assessment.ObservabilityCoverage)
+	if len(r.Assessment.TopRiskThemes) == 0 {
+		fmt.Fprintf(b, "- top risk themes: none\n")
+	} else {
+		fmt.Fprintf(b, "- top risk themes: %s\n", strings.Join(r.Assessment.TopRiskThemes, ", "))
+	}
+	if len(r.Assessment.ConfidenceLimiters) == 0 {
+		fmt.Fprintf(b, "- confidence limiters: none\n\n")
+	} else {
+		fmt.Fprintf(b, "- confidence limiters:\n")
+		for _, limiter := range r.Assessment.ConfidenceLimiters {
+			fmt.Fprintf(b, "  - %s\n", limiter)
+		}
+		fmt.Fprintf(b, "\n")
+	}
 
 	fmt.Fprintf(b, "### Key Findings\n")
 	if len(r.KeyFindings) == 0 {

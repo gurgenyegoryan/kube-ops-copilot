@@ -43,7 +43,7 @@ func NewDiagnoseCmd() *cobra.Command {
 			}
 
 			progress.Updatef("running analyzers")
-			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, client.Kubernetes, f.IncludeSystemNamespaces, f.EventsSince)}
+			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, client.Kubernetes, f.IncludeSystemNamespaces, f.EventsSince), Progress: progress.Eventf}
 			results, err := e.Run(ctx)
 			if err != nil {
 				progress.Failf("running analyzers")
