@@ -68,7 +68,7 @@ func NewSuggestCmd() *cobra.Command {
 			}
 
 			progress.Updatef("running analyzers")
-			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, kclient.Kubernetes, f.IncludeSystemNamespaces, f.EventsSince), Progress: progress.Eventf}
+			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, kclient, f.IncludeSystemNamespaces, f.EventsSince), Progress: progress.Eventf}
 			results, err := e.Run(ctx)
 			if err != nil {
 				progress.Failf("running analyzers")

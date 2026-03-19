@@ -72,7 +72,7 @@ func NewRemediateCmd() *cobra.Command {
 				return err
 			}
 
-			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, kclient.Kubernetes, f.IncludeSystemNamespaces, f.EventsSince)}
+			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, kclient, f.IncludeSystemNamespaces, f.EventsSince)}
 			results, err := e.Run(ctx)
 			if err != nil {
 				return err

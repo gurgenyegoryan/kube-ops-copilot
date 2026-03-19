@@ -63,6 +63,7 @@ These always run:
 - events
 - workloads
 - resources
+- workload risk profiling
 - PDB checks
 - discovery
 
@@ -76,6 +77,7 @@ Current examples:
 - traffic exposure analyzer
 - autoscaling posture analyzer
 - policy coverage analyzer
+- runtime resource metrics adapter for `metrics.k8s.io`
 - API warning/deprecation capture from Kubernetes warning headers
 
 This architecture is intended to grow. The point is that the agent should not be locked to a single observability stack or platform pattern.
@@ -137,6 +139,8 @@ This is deliberately capability-oriented, not vendor-oriented.
 - pending PVCs
 - externally exposed services without ready endpoints
 - exposed single-replica workloads without autoscaling posture
+- workloads where several weak signals combine into one real incident path
+- live CPU/memory hotspots when Kubernetes resource metrics are confirmed
 - active namespaces missing basic policy defaults
 - observability coverage that is too weak to support confident production guidance
 
@@ -144,9 +148,43 @@ It also tries to surface hidden risks, for example:
 
 - clusters that look healthy at rest but lack autoscaling
 - workloads that are externally exposed but depend on a single replica
+- workloads that individually look “fine” but together lack probes, PDB, HPA, and endpoint headroom
 - telemetry gaps that make high-confidence suggestions impossible
 - namespaces likely to accumulate noisy-neighbor incidents because they lack guardrails
 - deprecated Kubernetes API usage that may break after a future cluster upgrade
+
+## When this is actually production-ready
+
+The honest answer: this project is already useful, but "production-ready" should mean more than "it runs."
+
+For this tool, production-ready means all of the following are true:
+
+- it can analyze unfamiliar clusters without assuming a specific vendor, observability stack, or repo layout
+- it can explain confidence and confidence limiters clearly instead of sounding certain when data is incomplete
+- it can rank real workload risk concentration, not just count isolated misconfigurations
+- it can choose the right remediation path between read-only advice, live guarded execution, and infrastructure PR mode
+- it leaves an audit trail: approval request, exact plan, rollback notes, verification steps, PR body, and result artifacts
+- it degrades safely when telemetry, RBAC, or repo context is missing
+- it is validated against realistic fixtures and CI, not only happy-path demos
+
+What is already strong today:
+
+- dynamic capability discovery instead of hardcoding Prometheus/Loki/GitOps assumptions
+- workload-level structural risk profiling across Services, Ingress, EndpointSlice, HPA, PDB, probes, and resources
+- runtime enrichment through the Kubernetes resource metrics API when `metrics.k8s.io` is confirmed
+- live-vs-infra remediation selection
+- Terraform/Terragrunt/OpenTofu-oriented PR execution flow with audit output
+- live progress/activity rendering so operators can see what the agent is doing
+- demo fixtures, golden outputs, and CI-covered report behavior
+
+What still needs to mature before the project deserves a full "production-max" claim:
+
+- deeper runtime adapters for confirmed logs/traces backends and richer long-window time-series analysis beyond `metrics.k8s.io` snapshots
+- stronger repo mutation intelligence for complex Helm/Kustomize/Terragrunt graphs and richer cross-file edits
+- more scenario coverage with regression tests for tricky real-world cases
+- more end-to-end verification around approval workflows, notifications, and PR automation against external systems
+
+That is the bar this project should be judged against. The goal is not generic Kubernetes advice. The goal is a reliable operator agent that still behaves well when the cluster, tooling, and infrastructure layout are unfamiliar.
 
 ## Install
 
