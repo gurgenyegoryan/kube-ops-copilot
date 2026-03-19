@@ -412,7 +412,7 @@ Execute an already-approved infra plan:
 - embedded LLM workers: `openai`, `anthropic`, `ollama`
 - external coding agents: `codex-cli`, `claude-code`
 
-In external agent mode, the repo agent edits files directly inside `--infra-repo-path`, and the normal branch, commit, push, PR, and Telegram notification flow runs afterward. Use `--repo-agent-command` if the binary is not on your default `PATH` or if you want to point to a wrapper script.
+In external agent mode, the repo agent now runs inside a temporary isolated `git worktree` on its own branch instead of editing the main working tree directly. After the agent finishes, the normal commit, push, PR, and Telegram notification flow runs from that isolated branch. The live terminal UI now shows explicit safety steps such as `creating isolated repo-agent worktree`, `preparing isolated repo-agent branch`, and `cleaning isolated repo-agent worktree`. Use `--repo-agent-command` if the binary is not on your default `PATH` or if you want to point to a wrapper script.
 
 Inspect an infra plan result:
 

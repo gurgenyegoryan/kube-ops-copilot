@@ -35,6 +35,11 @@ type semanticHints struct {
 	Envs       []string
 }
 
+var (
+	reLongNumericToken = regexp.MustCompile(`^[0-9]{4,}$`)
+	reLongHexToken     = regexp.MustCompile(`^[0-9a-f]{6,}$`)
+)
+
 func buildTerraformRepoInventory(repoPath string, hintText string, maxFiles int, maxBytes int) (string, error) {
 	repoPath = strings.TrimSpace(repoPath)
 	if repoPath == "" {
@@ -526,7 +531,7 @@ func extractHintKeywordsFromText(hintText string) []string {
 		if len(token) < 4 {
 			continue
 		}
-		if matched, _ := regexp.MatchString(`^[0-9]{4,}$`, token); matched {
+		if reLongNumericToken.MatchString(token) {
 			continue
 		}
 		if _, ok := generic[token]; ok {
@@ -1427,7 +1432,7 @@ func looksLikeUsefulWorkloadHint(s string) bool {
 	if !strings.Contains(s, "-") {
 		return false
 	}
-	if matched, _ := regexp.MatchString(`^[0-9a-f]{6,}$`, s); matched {
+	if reLongHexToken.MatchString(s) {
 		return false
 	}
 	generic := map[string]struct{}{
@@ -1454,10 +1459,10 @@ func looksLikeUsefulWorkloadHint(s string) bool {
 		if len(token) < 3 {
 			continue
 		}
-		if matched, _ := regexp.MatchString(`^[0-9a-f]{6,}$`, token); matched {
+		if reLongHexToken.MatchString(token) {
 			continue
 		}
-		if matched, _ := regexp.MatchString(`^[0-9]{4,}$`, token); matched {
+		if reLongNumericToken.MatchString(token) {
 			continue
 		}
 		if _, ok := genericTokens[token]; ok {

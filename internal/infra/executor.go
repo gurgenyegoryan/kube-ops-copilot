@@ -25,23 +25,30 @@ type Executor struct {
 	RepoInventory string
 }
 
+type repoWorkspace struct {
+	baseRepoPath string
+	path         string
+	tempBranch   string
+	isolated     bool
+}
+
 func (e *Executor) Apply(ctx context.Context, plan PRPlan) (Result, error) {
 	if err := plan.Validate(); err != nil {
 		return Result{}, err
 	}
-	repoPath := strings.TrimSpace(e.RepoPath)
-	if repoPath == "" {
+	baseRepoPath := strings.TrimSpace(e.RepoPath)
+	if baseRepoPath == "" {
 		return Result{}, fmt.Errorf("repo path is required")
 	}
-	if st, err := os.Stat(repoPath); err != nil || !st.IsDir() {
-		return Result{}, fmt.Errorf("repo path is not a directory: %s", repoPath)
+	if st, err := os.Stat(baseRepoPath); err != nil || !st.IsDir() {
+		return Result{}, fmt.Errorf("repo path is not a directory: %s", baseRepoPath)
 	}
 	started := time.Now()
 	effectivePlan := plan
 
 	if e.RequireClean {
 		e.progress("checking git worktree cleanliness")
-		clean, out, err := gitClean(ctx, repoPath)
+		clean, out, err := gitClean(ctx, baseRepoPath)
 		if err != nil {
 			return Result{}, err
 		}
@@ -50,10 +57,30 @@ func (e *Executor) Apply(ctx context.Context, plan PRPlan) (Result, error) {
 		}
 	}
 
+	workspace := repoWorkspace{baseRepoPath: baseRepoPath, path: baseRepoPath}
+
 	if e.RepoAgent != nil {
+		if RefinerExecutionModeOf(e.RepoAgent) == RepoAgentExecutionModeIsolatedWorktree {
+			e.progress("creating isolated repo-agent worktree")
+			prepared, err := createRepoAgentWorkspace(ctx, baseRepoPath, effectivePlan.BranchName)
+			if err != nil {
+				return Result{}, err
+			}
+			workspace = prepared
+			defer func() {
+				e.progress("cleaning isolated repo-agent worktree")
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				if err := workspace.Cleanup(cleanupCtx); err != nil {
+					e.progress("warning: failed to clean repo agent worktree: %v", err)
+					return
+				}
+				e.progress("cleaned isolated repo-agent worktree")
+			}()
+		}
 		e.progress("running repo agent inside infra repo")
 		refined, err := e.RepoAgent.Refine(ctx, RefineRequest{
-			RepoPath:      repoPath,
+			RepoPath:      workspace.path,
 			RepoInventory: e.RepoInventory,
 			Plan:          effectivePlan,
 		})
@@ -67,8 +94,14 @@ func (e *Executor) Apply(ctx context.Context, plan PRPlan) (Result, error) {
 		if err := effectivePlan.Validate(); err != nil {
 			return Result{}, fmt.Errorf("effective infra plan is invalid: %w", err)
 		}
+		if workspace.isolated {
+			e.progress("preparing isolated repo-agent branch %s", effectivePlan.BranchName)
+		}
+		if err := workspace.EnsureBranch(ctx, effectivePlan.BranchName); err != nil {
+			return Result{}, err
+		}
 		if refined.DirectEdits {
-			changed, err := gitChangedFiles(ctx, repoPath)
+			changed, err := gitChangedFiles(ctx, workspace.path)
 			if err != nil {
 				return Result{}, err
 			}
@@ -77,7 +110,7 @@ func (e *Executor) Apply(ctx context.Context, plan PRPlan) (Result, error) {
 			}
 			e.progress("repo agent applied direct edits to %d file(s)", len(changed))
 			applied := changed
-			return e.finishApply(ctx, repoPath, effectivePlan, applied, started)
+			return e.finishApply(ctx, workspace.path, effectivePlan, applied, started, workspace.isolated)
 		}
 	}
 	if err := effectivePlan.Validate(); err != nil {
@@ -85,14 +118,14 @@ func (e *Executor) Apply(ctx context.Context, plan PRPlan) (Result, error) {
 	}
 
 	e.progress("applying %d repo edit(s)", len(effectivePlan.Edits))
-	applied, err := applyEdits(repoPath, effectivePlan.Edits)
+	applied, err := applyEdits(workspace.path, effectivePlan.Edits)
 	if err != nil {
 		return Result{}, err
 	}
-	return e.finishApply(ctx, repoPath, effectivePlan, applied, started)
+	return e.finishApply(ctx, workspace.path, effectivePlan, applied, started, workspace.isolated)
 }
 
-func (e *Executor) finishApply(ctx context.Context, repoPath string, effectivePlan PRPlan, applied []string, started time.Time) (Result, error) {
+func (e *Executor) finishApply(ctx context.Context, repoPath string, effectivePlan PRPlan, applied []string, started time.Time, branchPrepared bool) (Result, error) {
 	validationOutput := []string{}
 	if !e.SkipFmt {
 		e.progress("running %s formatter", effectivePlan.Backend)
@@ -115,9 +148,13 @@ func (e *Executor) finishApply(ctx context.Context, repoPath string, effectivePl
 		}
 	}
 
-	e.progress("creating branch %s", effectivePlan.BranchName)
-	if _, err := runCmd(ctx, repoPath, "git", "checkout", "-b", effectivePlan.BranchName); err != nil {
-		return Result{}, fmt.Errorf("git checkout -b failed: %w", err)
+	if branchPrepared {
+		e.progress("using isolated worktree branch %s", effectivePlan.BranchName)
+	} else {
+		e.progress("creating branch %s", effectivePlan.BranchName)
+		if _, err := runCmd(ctx, repoPath, "git", "checkout", "-b", effectivePlan.BranchName); err != nil {
+			return Result{}, fmt.Errorf("git checkout -b failed: %w", err)
+		}
 	}
 	e.progress("staging changed files")
 	addArgs := []string{"add"}
@@ -167,6 +204,83 @@ func (e *Executor) finishApply(ctx context.Context, repoPath string, effectivePl
 	}
 	result.EndedAt = time.Now()
 	return result, nil
+}
+
+func createRepoAgentWorkspace(ctx context.Context, baseRepoPath string, branchHint string) (repoWorkspace, error) {
+	worktreePath, err := os.MkdirTemp("", "kube-ops-copilot-repo-agent-*")
+	if err != nil {
+		return repoWorkspace{}, fmt.Errorf("create repo agent worktree dir: %w", err)
+	}
+	tempBranch := temporaryRepoAgentBranch(branchHint)
+	if _, err := runCmd(ctx, baseRepoPath, "git", "worktree", "add", "-b", tempBranch, worktreePath, "HEAD"); err != nil {
+		_ = os.RemoveAll(worktreePath)
+		return repoWorkspace{}, fmt.Errorf("git worktree add failed: %w", err)
+	}
+	return repoWorkspace{
+		baseRepoPath: baseRepoPath,
+		path:         worktreePath,
+		tempBranch:   tempBranch,
+		isolated:     true,
+	}, nil
+}
+
+func temporaryRepoAgentBranch(branchHint string) string {
+	slug := strings.ToLower(strings.TrimSpace(branchHint))
+	replacer := regexp.MustCompile(`[^a-z0-9._/-]+`)
+	slug = replacer.ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-./")
+	if slug == "" {
+		slug = "plan"
+	}
+	return fmt.Sprintf("koc/repo-agent/%s-%d", slug, time.Now().UTC().UnixNano())
+}
+
+func (w *repoWorkspace) EnsureBranch(ctx context.Context, branchName string) error {
+	if w == nil || !w.isolated {
+		return nil
+	}
+	branchName = strings.TrimSpace(branchName)
+	if branchName == "" {
+		return fmt.Errorf("branch name is required for isolated repo agent worktree")
+	}
+	current, err := runCmd(ctx, w.path, "git", "branch", "--show-current")
+	if err != nil {
+		return fmt.Errorf("read current worktree branch: %w", err)
+	}
+	current = strings.TrimSpace(current)
+	if current == branchName {
+		return nil
+	}
+	if _, err := runCmd(ctx, w.path, "git", "branch", "-m", branchName); err != nil {
+		return fmt.Errorf("rename isolated worktree branch to %s: %w", branchName, err)
+	}
+	w.tempBranch = ""
+	return nil
+}
+
+func (w repoWorkspace) Cleanup(ctx context.Context) error {
+	if !w.isolated {
+		return nil
+	}
+	var errs []string
+	if _, err := runCmd(ctx, w.baseRepoPath, "git", "worktree", "remove", "--force", w.path); err != nil {
+		errs = append(errs, fmt.Sprintf("worktree remove: %v", err))
+	}
+	if _, err := runCmd(ctx, w.baseRepoPath, "git", "worktree", "prune"); err != nil {
+		errs = append(errs, fmt.Sprintf("worktree prune: %v", err))
+	}
+	if w.tempBranch != "" {
+		if _, err := runCmd(ctx, w.baseRepoPath, "git", "branch", "-D", w.tempBranch); err != nil {
+			errs = append(errs, fmt.Sprintf("delete temp branch %s: %v", w.tempBranch, err))
+		}
+	}
+	if err := os.RemoveAll(w.path); err != nil {
+		errs = append(errs, fmt.Sprintf("remove temp dir: %v", err))
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf(strings.Join(errs, "; "))
+	}
+	return nil
 }
 
 func (e *Executor) progress(format string, args ...any) {

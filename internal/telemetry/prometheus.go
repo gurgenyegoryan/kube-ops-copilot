@@ -245,7 +245,7 @@ func decodeVector(body []byte) ([]VectorSample, error) {
 		if strings.TrimSpace(env.Error) == "" {
 			env.Error = "prometheus query failed"
 		}
-		return nil, fmt.Errorf(env.Error)
+		return nil, fmt.Errorf("%s", env.Error)
 	}
 	if env.Data.ResultType != "vector" {
 		return nil, fmt.Errorf("unexpected Prometheus result type: %s", env.Data.ResultType)
@@ -274,7 +274,7 @@ func decodeMatrix(body []byte) ([]MatrixSeries, error) {
 		if strings.TrimSpace(env.Error) == "" {
 			env.Error = "prometheus range query failed"
 		}
-		return nil, fmt.Errorf(env.Error)
+		return nil, fmt.Errorf("%s", env.Error)
 	}
 	if env.Data.ResultType != "matrix" {
 		return nil, fmt.Errorf("unexpected Prometheus result type: %s", env.Data.ResultType)

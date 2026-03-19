@@ -38,6 +38,14 @@ type externalRepoWorker struct {
 	Progress func(string, ...any)
 }
 
+func (w llmRepoWorker) ExecutionMode() infra.RepoAgentExecutionMode {
+	return infra.RepoAgentExecutionModeInPlace
+}
+
+func (w externalRepoWorker) ExecutionMode() infra.RepoAgentExecutionMode {
+	return infra.RepoAgentExecutionModeIsolatedWorktree
+}
+
 func maybeNewRepoAgentWorker(ctx context.Context, progress *liveProgress, flags repoAgentFlags, fallback llm.Config) (infra.PlanRefiner, error) {
 	providerName := strings.ToLower(strings.TrimSpace(flags.Provider))
 	if providerName == "" || providerName == string(llm.ProviderNone) {
@@ -186,7 +194,9 @@ func (w externalRepoWorker) Refine(ctx context.Context, req infra.RefineRequest)
 		return infra.RefineResult{}, err
 	}
 	if stdoutPath != "" {
-		defer os.Remove(stdoutPath)
+		defer func() {
+			_ = os.Remove(stdoutPath)
+		}()
 	}
 	if w.Progress != nil {
 		w.Progress("repo agent external runner: provider=%s command=%s", w.Provider, strings.Join(append([]string{w.Command}, args...), " "))
