@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/infra/hclresolver"
+	"github.com/gurgenyegoryan/kube-ops-copilot/internal/infra/repoignore"
 	"gopkg.in/yaml.v3"
 )
 
@@ -511,8 +512,7 @@ func scan(repoPath string) ([]repoFile, error) {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".terraform", ".terragrunt-cache":
+			if repoignore.ShouldSkipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil

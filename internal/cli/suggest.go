@@ -111,7 +111,7 @@ Output professional, concise Markdown.`)
 			resp, err := client.Complete(ctx, llm.Request{System: system, User: user, Model: f.Model, Temperature: f.Temperature})
 			if err != nil {
 				progress.Failf("asking LLM for operator suggestions")
-				return err
+				return withLLMTimeoutHint(err, "suggest", f.Timeout)
 			}
 			progress.Close()
 
@@ -178,7 +178,7 @@ Output professional, concise Markdown.`)
 
 	cmd.Flags().StringVar(&f.Kubeconfig, "kubeconfig", "", "Path to kubeconfig (default: in-cluster; else $KUBECONFIG; else ~/.kube/config)")
 	cmd.Flags().StringVar(&f.Context, "context", "", "Kubeconfig context override (default: current-context)")
-	cmd.Flags().DurationVar(&f.Timeout, "timeout", 60*time.Second, "Overall suggest timeout")
+	cmd.Flags().DurationVar(&f.Timeout, "timeout", 5*time.Minute, "Overall suggest timeout")
 	cmd.Flags().DurationVar(&f.EventsSince, "events-since", 60*time.Minute, "How far back to analyze Warning events")
 	cmd.Flags().BoolVar(&f.IncludeSystemNamespaces, "include-system-namespaces", false, "Include kube-system and other system namespaces in workload/resource/policy checks")
 	cmd.Flags().StringVar(&f.PlanOut, "plan-out", "", "Write an executable ExecutionPlan JSON (from LLM output) to this path")

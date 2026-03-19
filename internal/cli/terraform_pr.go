@@ -49,6 +49,8 @@ type terraformPRFlags struct {
 	SkipFmt      bool
 	RunValidate  bool
 	RequireClean bool
+
+	RepoAgent repoAgentFlags
 }
 
 func NewTerraformPRCmd() *cobra.Command {
@@ -159,6 +161,7 @@ InfraPRPlan schema:
   "createdAt": "RFC3339",
   "approvalId": "",
   "summary": "...",
+  "agentPrompt": "optional concise repo-editing brief for another coding agent",
   "branchName": "...",
   "commitMessage": "...",
   "prTitle": "...",
@@ -190,6 +193,7 @@ InfraPRPlan schema:
 Requirements:
 - backend must be terraform.
 - branchName, commitMessage, prTitle, summary are required.
+- agentPrompt is optional but helpful when the fix requires a secondary repo-editing agent to understand intent.
 - approvalId must be empty string.
 - edits must be safe and realistic.
 - If there is not enough evidence or repo context, output null.
@@ -199,7 +203,7 @@ Requirements:
 			resp, err := client.Complete(ctx, llm.Request{System: system, User: user, Model: f.Model, Temperature: f.Temperature})
 			if err != nil {
 				progress.Failf("asking LLM for infrastructure PR plan")
-				return err
+				return withLLMTimeoutHint(err, "terraform-pr", f.Timeout)
 			}
 			md := strings.TrimSpace(stripJSONPlanBlock(resp.Text))
 			progress.Printf("%s", md)
@@ -228,6 +232,7 @@ Requirements:
 			}
 			plan.ApprovalID = approvalID
 			plan.CreatedAt = time.Now().UTC()
+			ensureInfraAgentPrompt(plan)
 
 			planPath := strings.TrimSpace(f.PlanOut)
 			if planPath == "" {
@@ -287,16 +292,30 @@ Requirements:
 				return nil
 			}
 
+			ensureInfraAgentPrompt(plan)
+			repoAgent, err := maybeNewRepoAgentWorker(ctx, progress, f.RepoAgent, llm.Config{
+				Provider: provider,
+				Model:    f.Model,
+				BaseURL:  f.BaseURL,
+				APIKey:   f.APIKey,
+			})
+			if err != nil {
+				progress.Failf("initializing repo agent")
+				return err
+			}
+
 			progress.Updatef("applying approved infrastructure plan")
 			ex := infra.Executor{
-				RepoPath:     f.InfraRepoPath,
-				SkipFmt:      f.SkipFmt,
-				RunValidate:  f.RunValidate,
-				Push:         f.GitPush,
-				OpenPR:       f.OpenPR,
-				BaseBranch:   f.BaseBranch,
-				RequireClean: f.RequireClean,
-				Progress:     progress.Eventf,
+				RepoPath:      f.InfraRepoPath,
+				SkipFmt:       f.SkipFmt,
+				RunValidate:   f.RunValidate,
+				Push:          f.GitPush,
+				OpenPR:        f.OpenPR,
+				BaseBranch:    f.BaseBranch,
+				RequireClean:  f.RequireClean,
+				Progress:      progress.Eventf,
+				RepoAgent:     repoAgent,
+				RepoInventory: repoInventory,
 			}
 			result, err := ex.Apply(ctx, *plan)
 			if err != nil {
@@ -309,7 +328,7 @@ Requirements:
 			}
 			progress.Donef("applied infrastructure repo changes")
 			progress.Printf("applied terraform repo changes: branch=%s commit=%s pushed=%t pr=%s", result.BranchName, result.CommitSHA, result.Pushed, result.PullRequestURL)
-			if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot terraform-pr (applied)", truncateForTelegram(fmt.Sprintf("approvalId=%s branch=%s commit=%s pushed=%t pr=%s", approvalID, result.BranchName, result.CommitSHA, result.Pushed, result.PullRequestURL), 3500)); err != nil {
+			if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot terraform-pr (applied)", truncateForTelegram(formatInfraApplyNotification("approvalId="+approvalID, result), 3500)); err != nil {
 				return err
 			}
 			return nil
@@ -318,7 +337,7 @@ Requirements:
 
 	cmd.Flags().StringVar(&f.Kubeconfig, "kubeconfig", "", "Path to kubeconfig (default: in-cluster; else $KUBECONFIG; else ~/.kube/config)")
 	cmd.Flags().StringVar(&f.Context, "context", "", "Kubeconfig context override (default: current-context)")
-	cmd.Flags().DurationVar(&f.Timeout, "timeout", 3*time.Minute, "Overall terraform-pr timeout")
+	cmd.Flags().DurationVar(&f.Timeout, "timeout", 10*time.Minute, "Overall terraform-pr timeout")
 	cmd.Flags().DurationVar(&f.EventsSince, "events-since", 60*time.Minute, "How far back to analyze Warning events")
 	cmd.Flags().BoolVar(&f.IncludeSystemNamespaces, "include-system-namespaces", false, "Include kube-system and other system namespaces in workload/resource/policy checks")
 
@@ -344,6 +363,12 @@ Requirements:
 	cmd.Flags().BoolVar(&f.SkipFmt, "skip-fmt", false, "Skip terraform fmt -recursive")
 	cmd.Flags().BoolVar(&f.RunValidate, "terraform-validate", false, "Run terraform validate in changed module directories after edits")
 	cmd.Flags().BoolVar(&f.RequireClean, "require-clean-repo", true, "Refuse to edit the Terraform repo if git status is dirty")
+	cmd.Flags().StringVar(&f.RepoAgent.Provider, "repo-agent-provider", "", "Optional secondary repo agent provider: openai|anthropic|ollama|codex-cli|claude-code")
+	cmd.Flags().StringVar(&f.RepoAgent.Model, "repo-agent-model", "", "Optional secondary repo agent model (defaults to --llm-model)")
+	cmd.Flags().StringVar(&f.RepoAgent.BaseURL, "repo-agent-base-url", "", "Optional secondary repo agent base URL")
+	cmd.Flags().StringVar(&f.RepoAgent.APIKey, "repo-agent-api-key", "", "Optional secondary repo agent API key")
+	cmd.Flags().StringVar(&f.RepoAgent.Command, "repo-agent-command", "", "Optional external repo agent command path (useful for codex-cli or claude-code)")
+	cmd.Flags().Float64Var(&f.RepoAgent.Temperature, "repo-agent-temperature", 0, "Optional secondary repo agent temperature")
 
 	return cmd
 }

@@ -240,6 +240,7 @@ Long-running commands now show live progress in the terminal.
 - interactive terminals get a single refreshing status line
 - long phases such as cluster analysis, LLM planning, approval waiting, validation, git push, and PR creation update in place
 - the terminal now keeps a rolling activity feed under the live status line, so you can see what the agent is doing in the background instead of waiting on a silent spinner
+- this live activity feed now covers the long-running operator commands as well: `diagnose`, `suggest`, `remediate`, `smart-remediate`, `terraform-pr`, `execute`, and `infra execute`
 - durable events like approval ids, plan paths, and final results are still printed as normal lines
 - infra planning flows also write a repo inventory snapshot to `/tmp`, so when a Terraform PR plan is `null` you can inspect exactly what files and links the agent analyzed
 
@@ -298,6 +299,153 @@ They are intended for README media, launch posts, and product walkthroughs:
 - telemetry-rich `diagnose` demo
 - approval-driven `smart-remediate` demo
 - `vhs` tape files that can be rendered to GIF or SVG
+
+### Command cookbook
+
+These are the most useful copy-paste commands for daily use.
+
+Basic diagnosis:
+
+```bash
+./kube-ops-copilot diagnose \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --output markdown
+```
+
+LLM suggestions plus machine-readable plan:
+
+```bash
+./kube-ops-copilot suggest \
+  --llm-provider openai \
+  --llm-model gpt-5.4 \
+  --timeout 5m \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --plan-out /tmp/koc-plan.json
+```
+
+Approval-driven live remediation through n8n:
+
+```bash
+./kube-ops-copilot remediate \
+  --llm-provider openai \
+  --llm-model gpt-5.4 \
+  --timeout 10m \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --approval-provider n8n \
+  --notify \
+  --wait-approval \
+  --apply
+```
+
+Let the agent choose live fix vs infra PR:
+
+```bash
+./kube-ops-copilot smart-remediate \
+  --llm-provider openai \
+  --llm-model gpt-5.4 \
+  --repo-agent-provider codex-cli \
+  --timeout 10m \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --infra-repo-path ~/infra/live/prod \
+  --approval-provider n8n \
+  --notify \
+  --wait-approval \
+  --apply
+```
+
+Terraform/Terragrunt/OpenTofu PR flow:
+
+```bash
+./kube-ops-copilot terraform-pr \
+  --llm-provider openai \
+  --llm-model gpt-5.4 \
+  --repo-agent-provider codex-cli \
+  --timeout 10m \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --infra-repo-path ~/infra/live/prod \
+  --approval-provider n8n \
+  --notify \
+  --wait-approval \
+  --apply \
+  --git-push \
+  --open-pr \
+  --base-branch main
+```
+
+For heavy telemetry-rich clusters, large infrastructure repositories, or slower reasoning models such as `gpt-5.2` and `gpt-5.4`, prefer a larger timeout. The CLI now returns a direct hint when the LLM step times out, but these values are a good default starting point.
+
+Execute an already-approved live plan:
+
+```bash
+./kube-ops-copilot execute \
+  --plan /tmp/koc-plan.json \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --approval-provider n8n \
+  --approval-id APPROVAL-123 \
+  --approve \
+  --dry-run=false
+```
+
+Execute an already-approved infra plan:
+
+```bash
+./kube-ops-copilot infra execute \
+  --plan /tmp/koc-terraform-plan.json \
+  --infra-repo-path ~/infra/live/prod \
+  --repo-agent-provider claude-code \
+  --repo-inventory-file /tmp/kube-ops-copilot-infra-inventory.txt \
+  --approval-provider n8n \
+  --approval-id APPROVAL-123 \
+  --wait-approval \
+  --apply \
+  --git-push \
+  --open-pr
+```
+
+`--repo-agent-provider` enables a second repo-focused worker inside the provided infrastructure repo. Supported modes now include:
+- embedded LLM workers: `openai`, `anthropic`, `ollama`
+- external coding agents: `codex-cli`, `claude-code`
+
+In external agent mode, the repo agent edits files directly inside `--infra-repo-path`, and the normal branch, commit, push, PR, and Telegram notification flow runs afterward. Use `--repo-agent-command` if the binary is not on your default `PATH` or if you want to point to a wrapper script.
+
+Inspect an infra plan result:
+
+```bash
+./kube-ops-copilot infra status \
+  --plan /tmp/koc-terraform-plan.json \
+  --infra-repo-path ~/infra/live/prod
+```
+
+Request approval separately:
+
+```bash
+./kube-ops-copilot approval request \
+  --provider n8n \
+  --plan examples/execute-restart-deployment.json \
+  --write-plan
+```
+
+Check approval status:
+
+```bash
+./kube-ops-copilot approval status \
+  --provider n8n \
+  --approval-id APPROVAL-123
+```
+
+Run disposable live E2E:
+
+```bash
+bash hack/e2e/kind-live.sh up
+bash hack/e2e/kind-live.sh test
+bash hack/e2e/kind-live.sh down
+```
 
 ### 1. Deterministic diagnosis
 
@@ -449,7 +597,7 @@ Important:
 - HCL resolution is now hybrid: the agent first tries a real HCL2 parser/evaluator layer for `locals`, `include`, `dependency`, `source`, and path-like attributes, then falls back to heuristics only when structural evaluation is inconclusive
 - Terragrunt evaluation goes deeper than raw string parsing: the resolver now understands `read_terragrunt_config(...)` and can carry `locals` and `inputs` through chained config files when that is required to find real chart paths or `values-<env>.yaml` files
 - the repo graph is multi-file, not HCL-only: it also follows Helm charts, Helmfile, Kustomize overlays, raw Kubernetes YAML, and command-style references such as `kubectl -f/-k`, `helm -f`, and `kustomize build`
-- repo narrowing is also semantic, not only structural: cluster findings like namespace/workload names are turned into environment and workload aliases so the inventory can prioritize files such as `environments/test/...`, `modules/.../prometheus`, or `helm-charts/temporalio/...` even in unfamiliar layouts
+- repo narrowing is also semantic, not only structural: cluster findings like namespace/workload names are turned into environment and workload aliases so the inventory can prioritize likely owner files such as stage/service stacks, chart values/templates, kustomizations, or workload-specific modules even in unfamiliar layouts
 - it prefers HCL-aware edits like `hcl_set_attribute`, `hcl_delete_attribute`, `hcl_replace_block`, and `hcl_append_block_body`, with literal search/replace kept as fallback
 - HCL-aware attribute updates are multiline-friendly, so the executor can safely replace nested maps/lists instead of only one-line scalar values
 - by default it refuses to work in a dirty git repo

@@ -51,6 +51,8 @@ type smartRemediateFlags struct {
 	SkipFmt      bool
 	RunValidate  bool
 	RequireClean bool
+
+	RepoAgent repoAgentFlags
 }
 
 func NewSmartRemediateCmd() *cobra.Command {
@@ -59,49 +61,65 @@ func NewSmartRemediateCmd() *cobra.Command {
 		Use:   "smart-remediate",
 		Short: "Let the agent choose the safest remediation path: live cluster action or infra PR",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			progress := newLiveProgress(cmd.OutOrStdout(), "smart-remediate")
+			defer progress.Close()
 			provider := llm.Provider(strings.ToLower(strings.TrimSpace(f.Provider)))
 			if provider == "" {
 				provider = llm.ProviderNone
 			}
-			client, err := llm.New(llm.Config{Provider: provider, Model: f.Model, BaseURL: f.BaseURL, APIKey: f.APIKey})
+			progress.Updatef("initializing LLM client")
+			client, err := cliNewLLMClient(llm.Config{Provider: provider, Model: f.Model, BaseURL: f.BaseURL, APIKey: f.APIKey})
 			if err != nil {
+				progress.Failf("initializing LLM client")
 				return err
 			}
 			if client == nil {
+				progress.Failf("initializing LLM client")
 				return errors.New("no LLM provider configured")
 			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), f.Timeout)
 			defer cancel()
 
-			kclient, err := kube.NewClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
+			progress.Updatef("connecting to cluster")
+			kclient, err := cliNewKubeClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
 			if err != nil {
+				progress.Failf("connecting to cluster")
 				return err
 			}
-			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, kclient, f.IncludeSystemNamespaces, f.EventsSince)}
+			progress.Updatef("running analyzers")
+			e := engine.Engine{Analyzers: cliDefaultAnalyzers(ctx, kclient, f.IncludeSystemNamespaces, f.EventsSince), Progress: progress.Eventf}
 			results, err := e.Run(ctx)
 			if err != nil {
+				progress.Failf("running analyzers")
 				return err
 			}
 			if wr := warningResult(kclient.WarningCollector.Snapshot()); len(wr.Findings) > 0 || len(wr.Evidence) > 0 || len(wr.HiddenRisks) > 0 || len(wr.Recommended.ShortTerm) > 0 {
 				results = append(results, wr)
 			}
+			progress.Updatef("building diagnosis report")
 			rep := report.Build(results)
 			repJSON, err := json.Marshal(rep)
 			if err != nil {
 				return err
 			}
+			progress.Eventf("prepared diagnosis payload bytes=%d", len(repJSON))
 
 			repoInventory := "No infrastructure repo provided."
 			if strings.TrimSpace(f.InfraRepoPath) != "" {
-				inv, err := buildTerraformRepoInventory(f.InfraRepoPath, string(repJSON), 60, 180000)
+				progress.Updatef("building infrastructure repository inventory")
+				inv, err := cliBuildTerraformRepoInventory(f.InfraRepoPath, string(repJSON), 60, 180000)
 				if err != nil {
+					progress.Failf("building infrastructure repository inventory")
 					return err
 				}
 				repoInventory = inv
+				progress.Eventf("prepared infrastructure repository inventory bytes=%d", len(inv))
 				if path, err := writeTextArtifact("kube-ops-copilot-infra-inventory", inv); err == nil {
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "infrastructure repo inventory snapshot: %s\n", path)
+					progress.Printf("infrastructure repo inventory snapshot: %s", path)
 				}
+			} else {
+				progress.Eventf("no infrastructure repository path provided; plan selection limited to live actions")
 			}
 
 			system := strings.TrimSpace(`You are Kube Ops Copilot in unified remediation mode.
@@ -119,21 +137,32 @@ Rules:
 - do not invent repo files or cluster facts
 - produce exactly one JSON plan block`)
 
-			user := fmt.Sprintf("Diagnosis report JSON:\n\n%s\n\nInfra repo inventory:\n\n%s\n\nOutput Markdown first, then one JSON fenced block containing either:\n1) ExecutionPlan\n2) InfraPRPlan\n3) CompoundRemediationPlan\n4) null\n\nExecutionPlan schema:\n{\n  \"apiVersion\":\"kube-ops-copilot/v1alpha1\",\n  \"kind\":\"ExecutionPlan\",\n  \"createdAt\":\"RFC3339\",\n  \"approvalId\":\"\",\n  \"operation\":{\"type\":\"rollout_restart_deployment|scale_deployment\",\"namespace\":\"...\",\"name\":\"...\",\"replicas\":3,\"reason\":\"...\"},\n  \"verify\":{\"timeoutSeconds\":180}\n}\n\nInfraPRPlan schema:\n{\n  \"apiVersion\":\"kube-ops-copilot/v1alpha1\",\n  \"kind\":\"InfraPRPlan\",\n  \"backend\":\"terraform|opentofu|terragrunt\",\n  \"createdAt\":\"RFC3339\",\n  \"approvalId\":\"\",\n  \"summary\":\"...\",\n  \"branchName\":\"...\",\n  \"commitMessage\":\"...\",\n  \"prTitle\":\"...\",\n  \"prBody\":\"...\",\n  \"edits\":[{\"type\":\"hcl_set_attribute|hcl_delete_attribute|hcl_replace_block|hcl_append_block_body|search_replace\",\"path\":\"relative/path\",\"blockType\":\"resource|module|locals|variable|terraform|provider|dependency|include\",\"labels\":[\"...\"],\"attribute\":\"...\",\"valueHCL\":\"...\",\"blockHCL\":\"...\",\"search\":\"...\",\"replace\":\"...\"}],\n  \"verify\":{\"commands\":[\"...\"],\"notes\":[\"...\"]},\n  \"metadata\":{\"risk_note\":\"optional\",\"post_merge_check\":\"optional\"}\n}\n\nCompoundRemediationPlan schema:\n{\n  \"apiVersion\":\"kube-ops-copilot/v1alpha1\",\n  \"kind\":\"CompoundRemediationPlan\",\n  \"createdAt\":\"RFC3339\",\n  \"approvalId\":\"\",\n  \"summary\":\"...\",\n  \"live\": { ExecutionPlan object },\n  \"infra\": { InfraPRPlan object }\n}\n", string(repJSON), repoInventory)
+			user := fmt.Sprintf("Diagnosis report JSON:\n\n%s\n\nInfra repo inventory:\n\n%s\n\nOutput Markdown first, then one JSON fenced block containing either:\n1) ExecutionPlan\n2) InfraPRPlan\n3) CompoundRemediationPlan\n4) null\n\nExecutionPlan schema:\n{\n  \"apiVersion\":\"kube-ops-copilot/v1alpha1\",\n  \"kind\":\"ExecutionPlan\",\n  \"createdAt\":\"RFC3339\",\n  \"approvalId\":\"\",\n  \"operation\":{\"type\":\"rollout_restart_deployment|scale_deployment\",\"namespace\":\"...\",\"name\":\"...\",\"replicas\":3,\"reason\":\"...\"},\n  \"verify\":{\"timeoutSeconds\":180}\n}\n\nInfraPRPlan schema:\n{\n  \"apiVersion\":\"kube-ops-copilot/v1alpha1\",\n  \"kind\":\"InfraPRPlan\",\n  \"backend\":\"terraform|opentofu|terragrunt\",\n  \"createdAt\":\"RFC3339\",\n  \"approvalId\":\"\",\n  \"summary\":\"...\",\n  \"agentPrompt\":\"optional concise repo-editing brief for another coding agent\",\n  \"branchName\":\"...\",\n  \"commitMessage\":\"...\",\n  \"prTitle\":\"...\",\n  \"prBody\":\"...\",\n  \"edits\":[{\"type\":\"hcl_set_attribute|hcl_delete_attribute|hcl_replace_block|hcl_append_block_body|search_replace\",\"path\":\"relative/path\",\"blockType\":\"resource|module|locals|variable|terraform|provider|dependency|include\",\"labels\":[\"...\"],\"attribute\":\"...\",\"valueHCL\":\"...\",\"blockHCL\":\"...\",\"search\":\"...\",\"replace\":\"...\"}],\n  \"verify\":{\"commands\":[\"...\"],\"notes\":[\"...\"]},\n  \"metadata\":{\"risk_note\":\"optional\",\"post_merge_check\":\"optional\"}\n}\n\nCompoundRemediationPlan schema:\n{\n  \"apiVersion\":\"kube-ops-copilot/v1alpha1\",\n  \"kind\":\"CompoundRemediationPlan\",\n  \"createdAt\":\"RFC3339\",\n  \"approvalId\":\"\",\n  \"summary\":\"...\",\n  \"live\": { ExecutionPlan object },\n  \"infra\": { InfraPRPlan object }\n}\n", string(repJSON), repoInventory)
 
+			progress.Updatef("asking LLM for remediation path selection")
+			progress.Eventf("submitting LLM request provider=%s model=%s", provider, strings.TrimSpace(f.Model))
 			resp, err := client.Complete(ctx, llm.Request{System: system, User: user, Model: f.Model, Temperature: f.Temperature})
 			if err != nil {
-				return err
+				progress.Failf("asking LLM for remediation path selection")
+				return withLLMTimeoutHint(err, "smart-remediate", f.Timeout)
 			}
 			md := strings.TrimSpace(stripJSONPlanBlock(resp.Text))
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), md)
+			if md != "" {
+				progress.Printf("%s", md)
+			}
 			plan, err := extractAnyPlan(resp.Text)
 			if err != nil {
+				progress.Failf("validating remediation plan")
 				return err
 			}
 			if plan.Exec == nil && plan.Infra == nil && plan.Compound == nil {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\n(no executable remediation plan proposed for this snapshot)")
-				return sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot smart-remediate", truncateForTelegram(md, 3500))
+				progress.Printf("(no executable remediation plan proposed for this snapshot)")
+				if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot smart-remediate", truncateForTelegram(md, 3500)); err != nil {
+					progress.Failf("sending notification")
+					return err
+				}
+				progress.Donef("advisory-only result; no executable remediation path proposed")
+				return nil
 			}
 
 			approvalProvider := strings.ToLower(strings.TrimSpace(f.ApprovalProvider))
@@ -146,18 +175,18 @@ Rules:
 			}
 
 			if plan.Compound != nil {
-				return executeSmartCompoundPlan(ctx, cmd, f, approvalProvider, approvalID, md, *plan.Compound, kclient.Kubernetes)
+				return executeSmartCompoundPlan(ctx, progress, cmd, f, approvalProvider, approvalID, md, *plan.Compound, kclient.Kubernetes, repoInventory)
 			}
 			if plan.Exec != nil {
-				return executeSmartLivePlan(ctx, cmd, f, approvalProvider, approvalID, md, *plan.Exec, kclient.Kubernetes)
+				return executeSmartLivePlan(ctx, progress, cmd, f, approvalProvider, approvalID, md, *plan.Exec, kclient.Kubernetes)
 			}
-			return executeSmartInfraPlan(ctx, cmd, f, approvalProvider, approvalID, md, *plan.Infra)
+			return executeSmartInfraPlan(ctx, progress, cmd, f, approvalProvider, approvalID, md, *plan.Infra, repoInventory)
 		},
 	}
 
 	cmd.Flags().StringVar(&f.Kubeconfig, "kubeconfig", "", "Path to kubeconfig")
 	cmd.Flags().StringVar(&f.Context, "context", "", "Kubeconfig context override")
-	cmd.Flags().DurationVar(&f.Timeout, "timeout", 3*time.Minute, "Overall timeout")
+	cmd.Flags().DurationVar(&f.Timeout, "timeout", 10*time.Minute, "Overall timeout")
 	cmd.Flags().DurationVar(&f.EventsSince, "events-since", 60*time.Minute, "How far back to analyze Warning events")
 	cmd.Flags().BoolVar(&f.IncludeSystemNamespaces, "include-system-namespaces", false, "Include system namespaces in checks")
 	cmd.Flags().StringVar(&f.Provider, "llm-provider", "", "LLM provider")
@@ -179,11 +208,17 @@ Rules:
 	cmd.Flags().BoolVar(&f.SkipFmt, "skip-fmt", false, "Skip infra fmt")
 	cmd.Flags().BoolVar(&f.RunValidate, "validate", false, "Run infra validate")
 	cmd.Flags().BoolVar(&f.RequireClean, "require-clean-repo", true, "Require clean infra repo")
+	cmd.Flags().StringVar(&f.RepoAgent.Provider, "repo-agent-provider", "", "Optional secondary repo agent provider: openai|anthropic|ollama|codex-cli|claude-code")
+	cmd.Flags().StringVar(&f.RepoAgent.Model, "repo-agent-model", "", "Optional secondary repo agent model (defaults to --llm-model)")
+	cmd.Flags().StringVar(&f.RepoAgent.BaseURL, "repo-agent-base-url", "", "Optional secondary repo agent base URL")
+	cmd.Flags().StringVar(&f.RepoAgent.APIKey, "repo-agent-api-key", "", "Optional secondary repo agent API key")
+	cmd.Flags().StringVar(&f.RepoAgent.Command, "repo-agent-command", "", "Optional external repo agent command path (useful for codex-cli or claude-code)")
+	cmd.Flags().Float64Var(&f.RepoAgent.Temperature, "repo-agent-temperature", 0, "Optional secondary repo agent temperature")
 
 	return cmd
 }
 
-func executeSmartLivePlan(ctx context.Context, cmd *cobra.Command, f smartRemediateFlags, approvalProvider, approvalID, md string, plan exec.Plan, client *kubernetes.Clientset) error {
+func executeSmartLivePlan(ctx context.Context, progress *liveProgress, cmd *cobra.Command, f smartRemediateFlags, approvalProvider, approvalID, md string, plan exec.Plan, client *kubernetes.Clientset) error {
 	plan.CreatedAt = time.Now().UTC()
 	plan.ApprovalID = approvalID
 	planPath := strings.TrimSpace(f.PlanOut)
@@ -194,6 +229,7 @@ func executeSmartLivePlan(ctx context.Context, cmd *cobra.Command, f smartRemedi
 	if err != nil {
 		return err
 	}
+	progress.Updatef("writing live remediation plan")
 	if err := os.WriteFile(planPath, b, 0o600); err != nil {
 		return err
 	}
@@ -203,6 +239,7 @@ func executeSmartLivePlan(ctx context.Context, cmd *cobra.Command, f smartRemedi
 	if err != nil {
 		return err
 	}
+	progress.Updatef("requesting approval")
 	_, err = ap.Request(ctx, approval.Request{
 		ApprovalID: approvalID,
 		Summary:    fmt.Sprintf("%s %s/%s", plan.Operation.Type, plan.Operation.Namespace, plan.Operation.Name),
@@ -214,30 +251,45 @@ func executeSmartLivePlan(ctx context.Context, cmd *cobra.Command, f smartRemedi
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\napproval requested: provider=%s approval-id=%s\n", approvalProvider, approvalID)
+	progress.Printf("approval requested: provider=%s approval-id=%s", approvalProvider, approvalID)
+	progress.Printf("plan written: %s", planPath)
+	if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot smart-remediate (approval requested)", truncateForTelegram(fmt.Sprintf("approvalId=%s provider=%s mode=live op=%s target=%s/%s\nplan=%s", approvalID, approvalProvider, plan.Operation.Type, plan.Operation.Namespace, plan.Operation.Name, planPath), 3500)); err != nil {
+		progress.Failf("sending notification")
+		return err
+	}
 	if approvalProvider != string(approval.ProviderManual) {
 		if f.WaitApproval {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "waiting for approval decision (timeout=%s)…\n", f.ApprovalTimeout)
+			progress.Updatef("waiting for approval decision (%s)", f.ApprovalTimeout)
 		}
 		if err := ensureApproved(cmd.Context(), approvalProvider, approvalID, f.WaitApproval, f.ApprovalTimeout); err != nil {
+			progress.Failf("approval was not granted")
 			return err
 		}
 	}
 	if !f.Apply {
+		progress.Donef("approval recorded; live changes not applied because --apply was not requested")
 		return nil
 	}
-	ex := exec.Executor{Client: client}
+	progress.Updatef("applying approved live remediation")
+	ex := exec.Executor{Client: client, Progress: progress.Eventf}
 	result, err := ex.Apply(ctx, plan)
 	if err != nil {
+		progress.Failf("applying approved live remediation")
 		return err
 	}
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "applied live remediation: op=%s target=%s verified=%t\n", result.Operation, result.Target, result.Verified)
+	progress.Printf("applied live remediation: op=%s target=%s verified=%t", result.Operation, result.Target, result.Verified)
+	if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot smart-remediate (applied)", truncateForTelegram(fmt.Sprintf("approvalId=%s mode=live op=%s target=%s verified=%t", approvalID, result.Operation, result.Target, result.Verified), 3500)); err != nil {
+		progress.Failf("sending notification")
+		return err
+	}
+	progress.Donef("live remediation applied")
 	return nil
 }
 
-func executeSmartInfraPlan(ctx context.Context, cmd *cobra.Command, f smartRemediateFlags, approvalProvider, approvalID, md string, plan infra.PRPlan) error {
+func executeSmartInfraPlan(ctx context.Context, progress *liveProgress, cmd *cobra.Command, f smartRemediateFlags, approvalProvider, approvalID, md string, plan infra.PRPlan, repoInventory string) error {
 	plan.CreatedAt = time.Now().UTC()
 	plan.ApprovalID = approvalID
+	ensureInfraAgentPrompt(&plan)
 	planPath := strings.TrimSpace(f.PlanOut)
 	if planPath == "" {
 		planPath = filepath.Join(os.TempDir(), "kube-ops-copilot-smart-infra-plan-"+approvalID+".json")
@@ -246,6 +298,7 @@ func executeSmartInfraPlan(ctx context.Context, cmd *cobra.Command, f smartRemed
 	if err != nil {
 		return err
 	}
+	progress.Updatef("writing infrastructure remediation plan")
 	if err := os.WriteFile(planPath, b, 0o600); err != nil {
 		return err
 	}
@@ -255,6 +308,7 @@ func executeSmartInfraPlan(ctx context.Context, cmd *cobra.Command, f smartRemed
 	if err != nil {
 		return err
 	}
+	progress.Updatef("requesting approval")
 	_, err = ap.Request(ctx, approval.Request{
 		ApprovalID: approvalID,
 		Summary:    "infra-pr " + plan.Summary,
@@ -266,41 +320,72 @@ func executeSmartInfraPlan(ctx context.Context, cmd *cobra.Command, f smartRemed
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\napproval requested: provider=%s approval-id=%s\n", approvalProvider, approvalID)
+	progress.Printf("approval requested: provider=%s approval-id=%s", approvalProvider, approvalID)
+	progress.Printf("plan written: %s", planPath)
+	if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot smart-remediate (approval requested)", truncateForTelegram(fmt.Sprintf("approvalId=%s provider=%s mode=infra branch=%s repo=%s\nplan=%s", approvalID, approvalProvider, plan.BranchName, f.InfraRepoPath, planPath), 3500)); err != nil {
+		progress.Failf("sending notification")
+		return err
+	}
 	if approvalProvider != string(approval.ProviderManual) {
 		if f.WaitApproval {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "waiting for approval decision (timeout=%s)…\n", f.ApprovalTimeout)
+			progress.Updatef("waiting for approval decision (%s)", f.ApprovalTimeout)
 		}
 		if err := ensureApproved(cmd.Context(), approvalProvider, approvalID, f.WaitApproval, f.ApprovalTimeout); err != nil {
+			progress.Failf("approval was not granted")
 			return err
 		}
 	}
 	if !f.Apply {
+		progress.Donef("approval recorded; infrastructure changes not applied because --apply was not requested")
 		return nil
 	}
+	repoAgent, err := maybeNewRepoAgentWorker(ctx, progress, f.RepoAgent, llm.Config{
+		Provider: llm.Provider(strings.ToLower(strings.TrimSpace(f.Provider))),
+		Model:    f.Model,
+		BaseURL:  f.BaseURL,
+		APIKey:   f.APIKey,
+	})
+	if err != nil {
+		progress.Failf("initializing repo agent")
+		return err
+	}
+	progress.Updatef("applying approved infrastructure plan")
 	ex := infra.Executor{
-		RepoPath:     f.InfraRepoPath,
-		SkipFmt:      f.SkipFmt,
-		RunValidate:  f.RunValidate,
-		Push:         f.GitPush,
-		OpenPR:       f.OpenPR,
-		BaseBranch:   f.BaseBranch,
-		RequireClean: f.RequireClean,
+		RepoPath:      f.InfraRepoPath,
+		SkipFmt:       f.SkipFmt,
+		RunValidate:   f.RunValidate,
+		Push:          f.GitPush,
+		OpenPR:        f.OpenPR,
+		BaseBranch:    f.BaseBranch,
+		RequireClean:  f.RequireClean,
+		Progress:      progress.Eventf,
+		RepoAgent:     repoAgent,
+		RepoInventory: repoInventory,
 	}
 	result, err := ex.Apply(ctx, plan)
 	if err != nil {
+		progress.Failf("applying approved infrastructure plan")
 		return err
 	}
+	progress.Updatef("writing infrastructure execution result")
 	if err := infra.WriteResult(infra.ResultPathForPlan(planPath), result); err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "applied infra repo changes: backend=%s branch=%s commit=%s pushed=%t pr=%s\n", plan.Backend, result.BranchName, result.CommitSHA, result.Pushed, result.PullRequestURL)
+	progress.Printf("applied infra repo changes: backend=%s branch=%s commit=%s pushed=%t pr=%s", plan.Backend, result.BranchName, result.CommitSHA, result.Pushed, result.PullRequestURL)
+	if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot smart-remediate (applied)", truncateForTelegram(formatInfraApplyNotification("approvalId="+approvalID+" mode=infra backend="+string(plan.Backend), result), 3500)); err != nil {
+		progress.Failf("sending notification")
+		return err
+	}
+	progress.Donef("infrastructure remediation applied")
 	return nil
 }
 
-func executeSmartCompoundPlan(ctx context.Context, cmd *cobra.Command, f smartRemediateFlags, approvalProvider, approvalID, md string, plan compoundPlan, client *kubernetes.Clientset) error {
+func executeSmartCompoundPlan(ctx context.Context, progress *liveProgress, cmd *cobra.Command, f smartRemediateFlags, approvalProvider, approvalID, md string, plan compoundPlan, client *kubernetes.Clientset, repoInventory string) error {
 	plan.CreatedAt = time.Now().UTC()
 	plan.ApprovalID = approvalID
+	if plan.Infra != nil {
+		ensureInfraAgentPrompt(plan.Infra)
+	}
 	planPath := strings.TrimSpace(f.PlanOut)
 	if planPath == "" {
 		planPath = filepath.Join(os.TempDir(), "kube-ops-copilot-compound-plan-"+approvalID+".json")
@@ -309,6 +394,7 @@ func executeSmartCompoundPlan(ctx context.Context, cmd *cobra.Command, f smartRe
 	if err != nil {
 		return err
 	}
+	progress.Updatef("writing compound remediation plan")
 	if err := os.WriteFile(planPath, b, 0o600); err != nil {
 		return err
 	}
@@ -318,6 +404,7 @@ func executeSmartCompoundPlan(ctx context.Context, cmd *cobra.Command, f smartRe
 	if err != nil {
 		return err
 	}
+	progress.Updatef("requesting approval")
 	_, err = ap.Request(ctx, approval.Request{
 		ApprovalID: approvalID,
 		Summary:    "compound-remediation " + plan.Summary,
@@ -329,18 +416,26 @@ func executeSmartCompoundPlan(ctx context.Context, cmd *cobra.Command, f smartRe
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\napproval requested: provider=%s approval-id=%s\n", approvalProvider, approvalID)
+	progress.Printf("approval requested: provider=%s approval-id=%s", approvalProvider, approvalID)
+	progress.Printf("plan written: %s", planPath)
+	if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot smart-remediate (approval requested)", truncateForTelegram(fmt.Sprintf("approvalId=%s provider=%s mode=compound summary=%s\nplan=%s", approvalID, approvalProvider, plan.Summary, planPath), 3500)); err != nil {
+		progress.Failf("sending notification")
+		return err
+	}
 	if approvalProvider != string(approval.ProviderManual) {
 		if f.WaitApproval {
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "waiting for approval decision (timeout=%s)…\n", f.ApprovalTimeout)
+			progress.Updatef("waiting for approval decision (%s)", f.ApprovalTimeout)
 		}
 		if err := ensureApproved(cmd.Context(), approvalProvider, approvalID, f.WaitApproval, f.ApprovalTimeout); err != nil {
+			progress.Failf("approval was not granted")
 			return err
 		}
 	}
 	if !f.Apply {
+		progress.Donef("approval recorded; compound changes not applied because --apply was not requested")
 		return nil
 	}
+	progress.Updatef("writing compound execution trace")
 	executionResult := compoundExecutionResult{
 		ApprovalID: approvalID,
 		PlanPath:   planPath,
@@ -357,15 +452,17 @@ func executeSmartCompoundPlan(ctx context.Context, cmd *cobra.Command, f smartRe
 		return err
 	}
 	if plan.Live != nil {
+		progress.Updatef("applying compound live mitigation")
 		executionResult.Live.Status = compoundPhaseRunning
 		executionResult.Live.StartedAt = time.Now().UTC()
 		_ = writeCompoundResult(compoundResultPath(planPath), executionResult)
 		live := *plan.Live
 		live.ApprovalID = approvalID
 		live.CreatedAt = time.Now().UTC()
-		ex := exec.Executor{Client: client}
+		ex := exec.Executor{Client: client, Progress: progress.Eventf}
 		result, err := ex.Apply(ctx, live)
 		if err != nil {
+			progress.Failf("applying compound live mitigation")
 			executionResult.Live.Status = compoundPhaseFailed
 			executionResult.Live.EndedAt = time.Now().UTC()
 			executionResult.Live.Message = err.Error()
@@ -377,26 +474,47 @@ func executeSmartCompoundPlan(ctx context.Context, cmd *cobra.Command, f smartRe
 		executionResult.Live.EndedAt = time.Now().UTC()
 		executionResult.Live.Message = fmt.Sprintf("op=%s target=%s verified=%t", result.Operation, result.Target, result.Verified)
 		_ = writeCompoundResult(compoundResultPath(planPath), executionResult)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "compound live mitigation applied: op=%s target=%s verified=%t\n", result.Operation, result.Target, result.Verified)
+		progress.Printf("compound live mitigation applied: op=%s target=%s verified=%t", result.Operation, result.Target, result.Verified)
 	}
 	if plan.Infra != nil {
+		progress.Updatef("applying compound infrastructure remediation")
 		executionResult.Infra.Status = compoundPhaseRunning
 		executionResult.Infra.StartedAt = time.Now().UTC()
 		_ = writeCompoundResult(compoundResultPath(planPath), executionResult)
 		infraPlan := *plan.Infra
 		infraPlan.ApprovalID = approvalID
 		infraPlan.CreatedAt = time.Now().UTC()
+		ensureInfraAgentPrompt(&infraPlan)
+		repoAgent, err := maybeNewRepoAgentWorker(ctx, progress, f.RepoAgent, llm.Config{
+			Provider: llm.Provider(strings.ToLower(strings.TrimSpace(f.Provider))),
+			Model:    f.Model,
+			BaseURL:  f.BaseURL,
+			APIKey:   f.APIKey,
+		})
+		if err != nil {
+			progress.Failf("initializing repo agent")
+			executionResult.Infra.Status = compoundPhaseFailed
+			executionResult.Infra.EndedAt = time.Now().UTC()
+			executionResult.Infra.Message = err.Error()
+			executionResult.EndedAt = time.Now().UTC()
+			_ = writeCompoundResult(compoundResultPath(planPath), executionResult)
+			return err
+		}
 		ex := infra.Executor{
-			RepoPath:     f.InfraRepoPath,
-			SkipFmt:      f.SkipFmt,
-			RunValidate:  f.RunValidate,
-			Push:         f.GitPush,
-			OpenPR:       f.OpenPR,
-			BaseBranch:   f.BaseBranch,
-			RequireClean: f.RequireClean,
+			RepoPath:      f.InfraRepoPath,
+			SkipFmt:       f.SkipFmt,
+			RunValidate:   f.RunValidate,
+			Push:          f.GitPush,
+			OpenPR:        f.OpenPR,
+			BaseBranch:    f.BaseBranch,
+			RequireClean:  f.RequireClean,
+			Progress:      progress.Eventf,
+			RepoAgent:     repoAgent,
+			RepoInventory: repoInventory,
 		}
 		result, err := ex.Apply(ctx, infraPlan)
 		if err != nil {
+			progress.Failf("applying compound infrastructure remediation")
 			executionResult.Infra.Status = compoundPhaseFailed
 			executionResult.Infra.EndedAt = time.Now().UTC()
 			executionResult.Infra.Message = err.Error()
@@ -411,7 +529,7 @@ func executeSmartCompoundPlan(ctx context.Context, cmd *cobra.Command, f smartRe
 		executionResult.Infra.EndedAt = time.Now().UTC()
 		executionResult.Infra.Message = fmt.Sprintf("backend=%s branch=%s commit=%s pushed=%t pr=%s", infraPlan.Backend, result.BranchName, result.CommitSHA, result.Pushed, result.PullRequestURL)
 		_ = writeCompoundResult(compoundResultPath(planPath), executionResult)
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "compound infra remediation applied: backend=%s branch=%s commit=%s pushed=%t pr=%s\n", infraPlan.Backend, result.BranchName, result.CommitSHA, result.Pushed, result.PullRequestURL)
+		progress.Printf("compound infra remediation applied: backend=%s branch=%s commit=%s pushed=%t pr=%s", infraPlan.Backend, result.BranchName, result.CommitSHA, result.Pushed, result.PullRequestURL)
 	} else if executionResult.Infra != nil {
 		executionResult.Infra.Status = compoundPhaseSkipped
 	}
@@ -419,5 +537,14 @@ func executeSmartCompoundPlan(ctx context.Context, cmd *cobra.Command, f smartRe
 	if err := writeCompoundResult(compoundResultPath(planPath), executionResult); err != nil {
 		return err
 	}
+	compoundMsg := fmt.Sprintf("approvalId=%s mode=compound live=%t infra=%t result=%s", approvalID, plan.Live != nil, plan.Infra != nil, compoundResultPath(planPath))
+	if executionResult.Infra != nil && executionResult.Infra.Status == compoundPhaseSucceeded && strings.TrimSpace(executionResult.Infra.Message) != "" {
+		compoundMsg += "\n" + executionResult.Infra.Message
+	}
+	if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot smart-remediate (applied)", truncateForTelegram(compoundMsg, 3500)); err != nil {
+		progress.Failf("sending notification")
+		return err
+	}
+	progress.Donef("compound remediation applied")
 	return nil
 }

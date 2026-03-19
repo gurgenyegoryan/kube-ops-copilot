@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path"
@@ -10,7 +11,9 @@ import (
 	"strings"
 
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/infra/hclresolver"
+	"github.com/gurgenyegoryan/kube-ops-copilot/internal/infra/repoignore"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/infra/repositorygraph"
+	"github.com/gurgenyegoryan/kube-ops-copilot/internal/model"
 )
 
 type repoFile struct {
@@ -54,6 +57,13 @@ func buildTerraformRepoInventory(repoPath string, hintText string, maxFiles int,
 	for _, file := range repoFiles {
 		score, preview := scoreRepoFile(file, keywords, semantic, graph)
 		candidates[file.rel] = &inventoryCandidate{rel: file.rel, score: score, preview: preview}
+	}
+	for rel, bonus := range focusedCandidateBonuses(repoFiles, semantic) {
+		candidate, ok := candidates[rel]
+		if !ok {
+			continue
+		}
+		candidate.score += bonus
 	}
 
 	expandedLinks := map[string]int{}
@@ -102,9 +112,7 @@ func buildTerraformRepoInventory(repoPath string, hintText string, maxFiles int,
 	if maxFiles <= 0 {
 		maxFiles = 20
 	}
-	if len(files) > maxFiles {
-		files = files[:maxFiles]
-	}
+	files = selectInventoryCandidates(files, maxFiles)
 	if maxBytes <= 0 {
 		maxBytes = 50000
 	}
@@ -166,8 +174,7 @@ func scanInfraRepoFiles(repoPath string) ([]repoFile, error) {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", ".terraform", ".terragrunt-cache":
+			if repoignore.ShouldSkipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -275,7 +282,7 @@ func buildModuleGraph(repoPath string) (moduleGraph, error) {
 			return err
 		}
 		if d.IsDir() {
-			if d.Name() == ".git" || d.Name() == ".terraform" {
+			if repoignore.ShouldSkipDir(d.Name()) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -475,11 +482,54 @@ func resolveRelativeRef(baseDir, raw string) string {
 }
 
 func extractHintKeywords(hintText string) []string {
-	normalized := strings.NewReplacer("\n", " ", "\t", " ", "/", " ", "-", " ", "_", " ", ".", " ", ",", " ", ":", " ").Replace(strings.ToLower(hintText))
+	if keywords, ok := extractHintKeywordsFromReportJSON(hintText); ok {
+		return keywords
+	}
+	return extractHintKeywordsFromText(hintText)
+}
+
+func extractHintKeywordsFromReportJSON(hintText string) ([]string, bool) {
+	var rep model.Report
+	if err := json.Unmarshal([]byte(hintText), &rep); err != nil {
+		return nil, false
+	}
+	var texts []string
+	texts = append(texts, rep.ExecutiveSummary, rep.FinalVerdict, rep.ProposedOperatorMessage)
+	for _, f := range rep.KeyFindings {
+		texts = append(texts, f.Title, f.WhyItMatters, f.AffectedScope)
+	}
+	for _, e := range rep.Evidence {
+		texts = append(texts, e.Signal)
+	}
+	for _, h := range rep.HiddenRisks {
+		texts = append(texts, h)
+	}
+	for _, u := range rep.Unknowns {
+		texts = append(texts, u)
+	}
+	return extractHintKeywordsFromText(strings.Join(texts, "\n")), true
+}
+
+func extractHintKeywordsFromText(hintText string) []string {
+	normalized := strings.NewReplacer("\n", " ", "\t", " ", "/", " ", "-", " ", "_", " ", ".", " ", ",", " ", ":", " ", "\"", " ", "{", " ", "}", " ").Replace(strings.ToLower(hintText))
 	seen := map[string]struct{}{}
+	generic := map[string]struct{}{
+		"about": {}, "after": {}, "already": {}, "because": {}, "cluster": {}, "confidence": {}, "critical": {}, "current": {},
+		"evidence": {}, "generated": {}, "hidden": {}, "immediate": {}, "issue": {}, "latency": {}, "likely": {}, "memory": {},
+		"metrics": {}, "namespace": {}, "namespaces": {}, "operator": {}, "point": {}, "pressure": {}, "priority": {}, "readiness": {},
+		"recommendation": {}, "report": {}, "requests": {}, "resource": {}, "resources": {}, "restart": {}, "restarts": {},
+		"runtime": {}, "service": {}, "short": {}, "signal": {}, "signals": {}, "snapshot": {}, "summary": {}, "this": {},
+		"time": {}, "timeouts": {}, "unknown": {}, "unknowns": {}, "urgent": {}, "verdict": {}, "window": {}, "workload": {}, "workloads": {},
+	}
 	var out []string
 	for _, token := range strings.Fields(normalized) {
 		if len(token) < 4 {
+			continue
+		}
+		if matched, _ := regexp.MatchString(`^[0-9]{4,}$`, token); matched {
+			continue
+		}
+		if _, ok := generic[token]; ok {
 			continue
 		}
 		if _, ok := seen[token]; ok {
@@ -521,6 +571,9 @@ func scoreRepoFile(file repoFile, keywords []string, semantic semanticHints, gra
 	}
 	if looksLikeHelmfile(file.rel) {
 		score += 7
+	}
+	if isLockFile(file.rel) {
+		score -= 120
 	}
 	score += semanticScoreFile(file, semantic)
 	for _, node := range graph.Nodes {
@@ -936,6 +989,10 @@ func looksLikeHelmfile(rel string) bool {
 	return base == "helmfile.yaml" || base == "helmfile.yml"
 }
 
+func isLockFile(rel string) bool {
+	return filepath.Base(rel) == ".terraform.lock.hcl"
+}
+
 func isHCLFile(rel string) bool {
 	ext := strings.ToLower(filepath.Ext(rel))
 	return ext == ".hcl" || ext == ".tf" || ext == ".tfvars"
@@ -956,6 +1013,33 @@ func looksLikeCommandFile(rel string) bool {
 	}
 }
 
+func selectInventoryCandidates(files []inventoryCandidate, maxFiles int) []inventoryCandidate {
+	if maxFiles <= 0 {
+		maxFiles = len(files)
+	}
+	primary := make([]inventoryCandidate, 0, len(files))
+	fallback := make([]inventoryCandidate, 0, len(files))
+	for _, file := range files {
+		if isLockFile(file.rel) {
+			fallback = append(fallback, file)
+			continue
+		}
+		primary = append(primary, file)
+	}
+	selected := append([]inventoryCandidate(nil), primary...)
+	if len(selected) < maxFiles && len(selected) == 0 {
+		need := maxFiles - len(selected)
+		if len(fallback) < need {
+			need = len(fallback)
+		}
+		selected = append(selected, fallback[:need]...)
+	}
+	if len(selected) > maxFiles {
+		selected = selected[:maxFiles]
+	}
+	return selected
+}
+
 func sortedLinkKeys(values map[string]int, limit int) []string {
 	keys := make([]string, 0, len(values))
 	for key := range values {
@@ -974,7 +1058,37 @@ func sortedLinkKeys(values map[string]int, limit int) []string {
 }
 
 func extractSemanticHints(hintText string) semanticHints {
+	if hints, ok := extractSemanticHintsFromReportJSON(hintText); ok {
+		return hints
+	}
+	return extractSemanticHintsFromText(hintText)
+}
+
+func extractSemanticHintsFromReportJSON(hintText string) (semanticHints, bool) {
+	var rep model.Report
+	if err := json.Unmarshal([]byte(hintText), &rep); err != nil {
+		return semanticHints{}, false
+	}
+	var texts []string
+	texts = append(texts, rep.ExecutiveSummary, rep.FinalVerdict, rep.ProposedOperatorMessage)
+	for _, f := range rep.KeyFindings {
+		texts = append(texts, f.Title, f.WhyItMatters, f.AffectedScope)
+	}
+	for _, e := range rep.Evidence {
+		texts = append(texts, e.Signal)
+	}
+	for _, h := range rep.HiddenRisks {
+		texts = append(texts, h)
+	}
+	for _, u := range rep.Unknowns {
+		texts = append(texts, u)
+	}
+	return extractSemanticHintsFromText(strings.Join(texts, "\n")), true
+}
+
+func extractSemanticHintsFromText(hintText string) semanticHints {
 	nsNameRe := regexp.MustCompile(`\b([a-z0-9][a-z0-9-]{2,})/([a-z0-9][a-z0-9-]{2,})\b`)
+	workloadLikeRe := regexp.MustCompile(`\b[a-z0-9][a-z0-9-]{3,}\b`)
 	nsSeen := map[string]struct{}{}
 	workloadSeen := map[string]struct{}{}
 	aliasSeen := map[string]struct{}{}
@@ -1012,6 +1126,31 @@ func extractSemanticHints(hintText string) semanticHints {
 				aliasSeen[alias] = struct{}{}
 				hints.Aliases = append(hints.Aliases, alias)
 			}
+		}
+	}
+
+	for _, raw := range workloadLikeRe.FindAllString(strings.ToLower(hintText), -1) {
+		workload := strings.TrimSpace(raw)
+		if !looksLikeUsefulWorkloadHint(workload) {
+			continue
+		}
+		if _, ok := workloadSeen[workload]; !ok {
+			workloadSeen[workload] = struct{}{}
+			hints.Workloads = append(hints.Workloads, workload)
+		}
+		for _, alias := range expandWorkloadAliases(workload) {
+			if _, ok := aliasSeen[alias]; ok || alias == "" {
+				continue
+			}
+			aliasSeen[alias] = struct{}{}
+			hints.Aliases = append(hints.Aliases, alias)
+		}
+		for _, env := range inferEnvHints(workload) {
+			if _, ok := envSeen[env]; ok || env == "" {
+				continue
+			}
+			envSeen[env] = struct{}{}
+			hints.Envs = append(hints.Envs, env)
 		}
 	}
 
@@ -1073,7 +1212,12 @@ func expandWorkloadAliases(workload string) []string {
 		}
 	}
 	if len(tokens) >= 2 {
+		out = append(out, strings.Join(tokens[1:], "-"))
 		out = append(out, strings.Join(tokens[len(tokens)-2:], "-"))
+		last := tokens[len(tokens)-1]
+		if len(last) >= 4 {
+			out = append(out, last)
+		}
 	}
 	return uniqueStrings(out)
 }
@@ -1100,6 +1244,228 @@ func semanticCandidateBonuses(files []repoFile, semantic semanticHints) map[stri
 		}
 	}
 	return bonuses
+}
+
+func focusedCandidateBonuses(files []repoFile, semantic semanticHints) map[string]int {
+	bonuses := map[string]int{}
+	for _, file := range files {
+		lowerRel := strings.ToLower(file.rel)
+		if isLockFile(file.rel) {
+			bonuses[file.rel] -= 120
+		}
+		for _, env := range semantic.Envs {
+			if env == "" {
+				continue
+			}
+			if pathContainsSegment(lowerRel, env) {
+				bonuses[file.rel] += 20
+			}
+			if looksLikeEnvScopedValuesFile(lowerRel, env) {
+				bonuses[file.rel] += 34
+			}
+		}
+		for _, target := range append(append([]string{}, semantic.Workloads...), semantic.Aliases...) {
+			target = strings.TrimSpace(strings.ToLower(target))
+			if target == "" {
+				continue
+			}
+			bonuses[file.rel] += genericOwnerMatchBonus(file, target)
+		}
+	}
+	return bonuses
+}
+
+func genericOwnerMatchBonus(file repoFile, target string) int {
+	lowerRel := strings.ToLower(file.rel)
+	target = strings.TrimSpace(strings.ToLower(target))
+	if target == "" {
+		return 0
+	}
+	score := 0
+	if pathHasExactOwnerSegment(lowerRel, target) {
+		score += 180
+	}
+	if pathHasNearOwnerSegment(lowerRel, target) {
+		score += 90
+	}
+	if strings.Contains(lowerRel, target) {
+		score += 28
+	}
+	if looksLikeWorkloadOwnerFile(lowerRel) && pathHasNearOwnerSegment(lowerRel, target) {
+		score += 40
+	}
+	if looksLikeGenericInfraEntry(file) && (pathHasNearOwnerSegment(lowerRel, target) || strings.Contains(strings.ToLower(file.content), target)) {
+		score += 32
+	}
+	return score
+}
+
+func pathHasExactOwnerSegment(rel, target string) bool {
+	for _, seg := range repoPathSegments(rel) {
+		if seg == target {
+			return true
+		}
+	}
+	return false
+}
+
+func pathHasNearOwnerSegment(rel, target string) bool {
+	for _, seg := range repoPathSegments(rel) {
+		switch {
+		case seg == target:
+			return true
+		case strings.Contains(seg, target):
+			return true
+		case strings.Contains(target, seg) && len(seg) >= 4:
+			return true
+		}
+	}
+	return false
+}
+
+func pathContainsSegment(rel, segment string) bool {
+	segment = strings.TrimSpace(strings.ToLower(segment))
+	if segment == "" {
+		return false
+	}
+	for _, seg := range repoPathSegments(rel) {
+		if seg == segment {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeEnvScopedValuesFile(rel, env string) bool {
+	base := strings.ToLower(filepath.Base(rel))
+	env = strings.TrimSpace(strings.ToLower(env))
+	if env == "" {
+		return false
+	}
+	return strings.Contains(base, "values-"+env+".yaml") ||
+		strings.Contains(base, "values-"+env+".yml") ||
+		strings.Contains(base, "values_"+env+".yaml") ||
+		strings.Contains(base, "values_"+env+".yml")
+}
+
+func looksLikeWorkloadOwnerFile(rel string) bool {
+	base := strings.ToLower(filepath.Base(rel))
+	switch {
+	case base == "terragrunt.hcl":
+		return true
+	case base == "chart.yaml" || base == "chart.yml":
+		return true
+	case base == "helmfile.yaml" || base == "helmfile.yml":
+		return true
+	case base == "kustomization.yaml" || base == "kustomization.yml":
+		return true
+	case strings.HasPrefix(base, "values-") && (strings.HasSuffix(base, ".yaml") || strings.HasSuffix(base, ".yml")):
+		return true
+	case base == "values.yaml" || base == "values.yml":
+		return true
+	case strings.Contains(rel, "/templates/"):
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikeGenericInfraEntry(file repoFile) bool {
+	lowerRel := strings.ToLower(file.rel)
+	lowerContent := strings.ToLower(file.content)
+	return looksLikeWorkloadOwnerFile(lowerRel) ||
+		strings.Contains(lowerContent, "helm_release") ||
+		strings.Contains(lowerContent, "kubernetes_manifest") ||
+		strings.Contains(lowerContent, "kubectl_manifest") ||
+		strings.Contains(lowerContent, "chart_path") ||
+		strings.Contains(lowerContent, "values_file") ||
+		strings.Contains(lowerContent, "kustomization") ||
+		strings.Contains(lowerContent, "kubectl apply") ||
+		strings.Contains(lowerContent, "helm upgrade") ||
+		strings.Contains(lowerContent, "helm template")
+}
+
+func repoPathSegments(rel string) []string {
+	rel = filepath.ToSlash(strings.ToLower(rel))
+	parts := strings.Split(rel, "/")
+	var out []string
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || part == "." {
+			continue
+		}
+		base := strings.TrimSuffix(part, filepath.Ext(part))
+		if base != "" {
+			out = append(out, base)
+		}
+		out = append(out, tokenizeOwnerSegment(part)...)
+	}
+	return uniqueStrings(out)
+}
+
+func tokenizeOwnerSegment(s string) []string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "" {
+		return nil
+	}
+	replacer := strings.NewReplacer("-", " ", "_", " ", ".", " ")
+	var out []string
+	for _, token := range strings.Fields(replacer.Replace(s)) {
+		if len(token) < 3 {
+			continue
+		}
+		out = append(out, token)
+	}
+	return uniqueStrings(out)
+}
+
+func looksLikeUsefulWorkloadHint(s string) bool {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if s == "" || len(s) < 4 {
+		return false
+	}
+	if !strings.Contains(s, "-") {
+		return false
+	}
+	if matched, _ := regexp.MatchString(`^[0-9a-f]{6,}$`, s); matched {
+		return false
+	}
+	generic := map[string]struct{}{
+		"executive-summary": {}, "executivesummary": {}, "generated-at": {}, "generatedat": {}, "risk-profile": {}, "runtime-metrics": {},
+		"include-system-namespaces": {}, "approval-provider": {}, "wait-approval": {}, "approval-timeout": {},
+	}
+	if _, ok := generic[s]; ok {
+		return false
+	}
+	tokens := tokenizeIdentifier(s)
+	meaningful := 0
+	genericTokens := map[string]struct{}{
+		"already": {}, "against": {}, "based": {}, "candidate": {}, "cluster": {}, "completed": {}, "config": {}, "critical": {},
+		"cross": {}, "dependency": {}, "deployment": {}, "disruption": {}, "drift": {}, "east": {}, "error": {}, "evidence": {},
+		"executive": {}, "facing": {}, "failure": {}, "generated": {}, "health": {}, "highest": {}, "inflicted": {}, "liveness": {},
+		"live": {}, "long": {}, "memory": {}, "metrics": {}, "namespace": {}, "namespaces": {}, "near": {}, "node": {}, "non": {},
+		"observability": {}, "only": {}, "operator": {}, "partial": {}, "platform": {}, "point": {}, "policies": {}, "policy": {},
+		"pressure": {}, "probes": {}, "production": {}, "profile": {}, "readiness": {}, "read": {}, "resource": {},
+		"resources": {}, "risk": {}, "rollouts": {}, "running": {}, "runtime": {}, "self": {}, "series": {}, "severity": {},
+		"short": {}, "signal": {}, "signals": {}, "single": {}, "sized": {}, "specified": {}, "static": {}, "term": {}, "thresholds": {},
+		"time": {}, "timeouts": {}, "under": {}, "user": {}, "visible": {}, "window": {}, "workload": {}, "workloads": {}, "zero": {},
+	}
+	for _, token := range tokens {
+		if len(token) < 3 {
+			continue
+		}
+		if matched, _ := regexp.MatchString(`^[0-9a-f]{6,}$`, token); matched {
+			continue
+		}
+		if matched, _ := regexp.MatchString(`^[0-9]{4,}$`, token); matched {
+			continue
+		}
+		if _, ok := genericTokens[token]; ok {
+			continue
+		}
+		meaningful++
+	}
+	return meaningful > 0
 }
 
 func tokenizeIdentifier(s string) []string {

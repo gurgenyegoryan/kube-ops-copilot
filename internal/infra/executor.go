@@ -13,14 +13,16 @@ import (
 )
 
 type Executor struct {
-	RepoPath     string
-	SkipFmt      bool
-	RunValidate  bool
-	Push         bool
-	OpenPR       bool
-	BaseBranch   string
-	RequireClean bool
-	Progress     func(string, ...any)
+	RepoPath      string
+	SkipFmt       bool
+	RunValidate   bool
+	Push          bool
+	OpenPR        bool
+	BaseBranch    string
+	RequireClean  bool
+	Progress      func(string, ...any)
+	RepoAgent     PlanRefiner
+	RepoInventory string
 }
 
 func (e *Executor) Apply(ctx context.Context, plan PRPlan) (Result, error) {
@@ -35,6 +37,7 @@ func (e *Executor) Apply(ctx context.Context, plan PRPlan) (Result, error) {
 		return Result{}, fmt.Errorf("repo path is not a directory: %s", repoPath)
 	}
 	started := time.Now()
+	effectivePlan := plan
 
 	if e.RequireClean {
 		e.progress("checking git worktree cleanliness")
@@ -47,24 +50,61 @@ func (e *Executor) Apply(ctx context.Context, plan PRPlan) (Result, error) {
 		}
 	}
 
-	e.progress("applying %d repo edit(s)", len(plan.Edits))
-	applied, err := applyEdits(repoPath, plan.Edits)
+	if e.RepoAgent != nil {
+		e.progress("running repo agent inside infra repo")
+		refined, err := e.RepoAgent.Refine(ctx, RefineRequest{
+			RepoPath:      repoPath,
+			RepoInventory: e.RepoInventory,
+			Plan:          effectivePlan,
+		})
+		if err != nil {
+			return Result{}, fmt.Errorf("repo agent refine failed: %w", err)
+		}
+		effectivePlan = refined.Plan
+		if narrative := strings.TrimSpace(refined.Narrative); narrative != "" {
+			e.progress("repo agent refined plan: %s", narrative)
+		}
+		if err := effectivePlan.Validate(); err != nil {
+			return Result{}, fmt.Errorf("effective infra plan is invalid: %w", err)
+		}
+		if refined.DirectEdits {
+			changed, err := gitChangedFiles(ctx, repoPath)
+			if err != nil {
+				return Result{}, err
+			}
+			if len(changed) == 0 {
+				return Result{}, fmt.Errorf("repo agent reported direct edits but git detected no changed files")
+			}
+			e.progress("repo agent applied direct edits to %d file(s)", len(changed))
+			applied := changed
+			return e.finishApply(ctx, repoPath, effectivePlan, applied, started)
+		}
+	}
+	if err := effectivePlan.Validate(); err != nil {
+		return Result{}, fmt.Errorf("effective infra plan is invalid: %w", err)
+	}
+
+	e.progress("applying %d repo edit(s)", len(effectivePlan.Edits))
+	applied, err := applyEdits(repoPath, effectivePlan.Edits)
 	if err != nil {
 		return Result{}, err
 	}
+	return e.finishApply(ctx, repoPath, effectivePlan, applied, started)
+}
 
+func (e *Executor) finishApply(ctx context.Context, repoPath string, effectivePlan PRPlan, applied []string, started time.Time) (Result, error) {
 	validationOutput := []string{}
 	if !e.SkipFmt {
-		e.progress("running %s formatter", plan.Backend)
-		if out, err := runBackendFmt(ctx, repoPath, plan.Backend); err != nil {
-			return Result{}, fmt.Errorf("%s fmt failed: %w\n%s", plan.Backend, err, out)
+		e.progress("running %s formatter", effectivePlan.Backend)
+		if out, err := runBackendFmt(ctx, repoPath, effectivePlan.Backend); err != nil {
+			return Result{}, fmt.Errorf("%s fmt failed: %w\n%s", effectivePlan.Backend, err, out)
 		} else if strings.TrimSpace(out) != "" {
 			validationOutput = append(validationOutput, out)
 		}
 	}
 	if e.RunValidate {
-		e.progress("running %s validation", plan.Backend)
-		outputs, err := runBackendValidate(ctx, repoPath, plan.Backend, applied)
+		e.progress("running %s validation", effectivePlan.Backend)
+		outputs, err := runBackendValidate(ctx, repoPath, effectivePlan.Backend, applied)
 		if err != nil {
 			return Result{}, err
 		}
@@ -75,8 +115,8 @@ func (e *Executor) Apply(ctx context.Context, plan PRPlan) (Result, error) {
 		}
 	}
 
-	e.progress("creating branch %s", plan.BranchName)
-	if _, err := runCmd(ctx, repoPath, "git", "checkout", "-b", plan.BranchName); err != nil {
+	e.progress("creating branch %s", effectivePlan.BranchName)
+	if _, err := runCmd(ctx, repoPath, "git", "checkout", "-b", effectivePlan.BranchName); err != nil {
 		return Result{}, fmt.Errorf("git checkout -b failed: %w", err)
 	}
 	e.progress("staging changed files")
@@ -86,7 +126,7 @@ func (e *Executor) Apply(ctx context.Context, plan PRPlan) (Result, error) {
 		return Result{}, fmt.Errorf("git add failed: %w", err)
 	}
 	e.progress("creating git commit")
-	if _, err := runCmd(ctx, repoPath, "git", "commit", "-m", plan.CommitMessage); err != nil {
+	if _, err := runCmd(ctx, repoPath, "git", "commit", "-m", effectivePlan.CommitMessage); err != nil {
 		return Result{}, fmt.Errorf("git commit failed: %w", err)
 	}
 	e.progress("reading commit SHA")
@@ -96,8 +136,8 @@ func (e *Executor) Apply(ctx context.Context, plan PRPlan) (Result, error) {
 	}
 
 	result := Result{
-		Backend:          plan.Backend,
-		BranchName:       plan.BranchName,
+		Backend:          effectivePlan.Backend,
+		BranchName:       effectivePlan.BranchName,
 		CommitSHA:        strings.TrimSpace(sha),
 		AppliedFiles:     applied,
 		StartedAt:        started,
@@ -107,7 +147,7 @@ func (e *Executor) Apply(ctx context.Context, plan PRPlan) (Result, error) {
 
 	if e.Push {
 		e.progress("pushing branch to origin")
-		args := []string{"push", "-u", "origin", plan.BranchName}
+		args := []string{"push", "-u", "origin", effectivePlan.BranchName}
 		if _, err := runCmd(ctx, repoPath, "git", args...); err != nil {
 			return Result{}, fmt.Errorf("git push failed: %w", err)
 		}
@@ -115,7 +155,7 @@ func (e *Executor) Apply(ctx context.Context, plan PRPlan) (Result, error) {
 	}
 	if e.OpenPR {
 		e.progress("opening GitHub pull request")
-		args := []string{"pr", "create", "--title", plan.PRTitle, "--body", buildPRBody(plan, result), "--head", plan.BranchName}
+		args := []string{"pr", "create", "--title", effectivePlan.PRTitle, "--body", buildPRBody(effectivePlan, result), "--head", effectivePlan.BranchName}
 		if strings.TrimSpace(e.BaseBranch) != "" {
 			args = append(args, "--base", e.BaseBranch)
 		}
@@ -135,10 +175,41 @@ func (e *Executor) progress(format string, args ...any) {
 	}
 }
 
+func gitChangedFiles(ctx context.Context, repoPath string) ([]string, error) {
+	changedSet := map[string]struct{}{}
+	for _, args := range [][]string{
+		{"diff", "--name-only", "--relative"},
+		{"ls-files", "--others", "--exclude-standard"},
+	} {
+		out, err := runCmd(ctx, repoPath, "git", args...)
+		if err != nil {
+			return nil, fmt.Errorf("git %s failed: %w", strings.Join(args, " "), err)
+		}
+		for _, line := range strings.Split(out, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			changedSet[line] = struct{}{}
+		}
+	}
+	files := make([]string, 0, len(changedSet))
+	for file := range changedSet {
+		files = append(files, file)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
 func buildPRBody(plan PRPlan, result Result) string {
 	var b strings.Builder
 	if strings.TrimSpace(plan.PRBody) != "" {
 		b.WriteString(strings.TrimSpace(plan.PRBody))
+		b.WriteString("\n\n")
+	}
+	if strings.TrimSpace(plan.AgentPrompt) != "" {
+		b.WriteString("## Agent Brief\n")
+		b.WriteString(strings.TrimSpace(plan.AgentPrompt))
 		b.WriteString("\n\n")
 	}
 	b.WriteString("## Change Summary\n")

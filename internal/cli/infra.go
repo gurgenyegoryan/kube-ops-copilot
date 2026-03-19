@@ -3,28 +3,32 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/approval"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/infra"
+	"github.com/gurgenyegoryan/kube-ops-copilot/internal/llm"
 	"github.com/spf13/cobra"
 )
 
 type infraFlags struct {
-	RepoPath         string
-	PlanPath         string
-	ApprovalProvider string
-	ApprovalID       string
-	WaitApproval     bool
-	ApprovalTimeout  time.Duration
-	Apply            bool
-	GitPush          bool
-	OpenPR           bool
-	BaseBranch       string
-	SkipFmt          bool
-	RunValidate      bool
-	RequireClean     bool
+	RepoPath          string
+	PlanPath          string
+	ApprovalProvider  string
+	ApprovalID        string
+	WaitApproval      bool
+	ApprovalTimeout   time.Duration
+	Apply             bool
+	GitPush           bool
+	OpenPR            bool
+	BaseBranch        string
+	SkipFmt           bool
+	RunValidate       bool
+	RequireClean      bool
+	RepoInventoryFile string
+	RepoAgent         repoAgentFlags
 }
 
 func NewInfraCmd() *cobra.Command {
@@ -90,16 +94,32 @@ func newInfraExecuteCmd(f *infraFlags) *cobra.Command {
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), 20*time.Minute)
 			defer cancel()
+			var repoInventory string
+			if strings.TrimSpace(f.RepoInventoryFile) != "" {
+				b, err := os.ReadFile(f.RepoInventoryFile)
+				if err != nil {
+					progress.Failf("loading repo inventory file")
+					return err
+				}
+				repoInventory = string(b)
+			}
+			repoAgent, err := maybeNewRepoAgentWorker(ctx, progress, f.RepoAgent, llm.Config{})
+			if err != nil {
+				progress.Failf("initializing repo agent")
+				return err
+			}
 			progress.Updatef("executing infrastructure plan")
 			ex := infra.Executor{
-				RepoPath:     f.RepoPath,
-				SkipFmt:      f.SkipFmt,
-				RunValidate:  f.RunValidate,
-				Push:         f.GitPush,
-				OpenPR:       f.OpenPR,
-				BaseBranch:   f.BaseBranch,
-				RequireClean: f.RequireClean,
-				Progress:     progress.Eventf,
+				RepoPath:      f.RepoPath,
+				SkipFmt:       f.SkipFmt,
+				RunValidate:   f.RunValidate,
+				Push:          f.GitPush,
+				OpenPR:        f.OpenPR,
+				BaseBranch:    f.BaseBranch,
+				RequireClean:  f.RequireClean,
+				Progress:      progress.Eventf,
+				RepoAgent:     repoAgent,
+				RepoInventory: repoInventory,
 			}
 			result, err := ex.Apply(ctx, plan)
 			if err != nil {
@@ -160,4 +180,11 @@ func addInfraFlags(cmd *cobra.Command, f *infraFlags) {
 	cmd.Flags().BoolVar(&f.SkipFmt, "skip-fmt", false, "Skip backend formatting step")
 	cmd.Flags().BoolVar(&f.RunValidate, "validate", false, "Run backend validate step")
 	cmd.Flags().BoolVar(&f.RequireClean, "require-clean-repo", true, "Refuse to edit a dirty git repo")
+	cmd.Flags().StringVar(&f.RepoInventoryFile, "repo-inventory-file", "", "Optional path to a saved repo inventory snapshot for repo-agent mode")
+	cmd.Flags().StringVar(&f.RepoAgent.Provider, "repo-agent-provider", "", "Optional secondary repo agent provider: openai|anthropic|ollama|codex-cli|claude-code")
+	cmd.Flags().StringVar(&f.RepoAgent.Model, "repo-agent-model", "", "Optional secondary repo agent model")
+	cmd.Flags().StringVar(&f.RepoAgent.BaseURL, "repo-agent-base-url", "", "Optional secondary repo agent base URL")
+	cmd.Flags().StringVar(&f.RepoAgent.APIKey, "repo-agent-api-key", "", "Optional secondary repo agent API key")
+	cmd.Flags().StringVar(&f.RepoAgent.Command, "repo-agent-command", "", "Optional external repo agent command path (useful for codex-cli or claude-code)")
+	cmd.Flags().Float64Var(&f.RepoAgent.Temperature, "repo-agent-temperature", 0, "Optional secondary repo agent temperature")
 }

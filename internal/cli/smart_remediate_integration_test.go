@@ -59,6 +59,8 @@ func TestExecuteSmartCompoundPlanAppliesLiveAndInfraPhases(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
+	progress := newLiveProgress(&out, "smart-remediate")
+	defer progress.Close()
 
 	planPath := filepath.Join(t.TempDir(), "compound-plan.json")
 	flags := smartRemediateFlags{
@@ -110,7 +112,7 @@ func TestExecuteSmartCompoundPlanAppliesLiveAndInfraPhases(t *testing.T) {
 		},
 	}
 
-	if err := executeSmartCompoundPlan(context.Background(), cmd, flags, "manual", "approval-123", "compound remediation requested", plan, kclient.Kubernetes); err != nil {
+	if err := executeSmartCompoundPlan(context.Background(), progress, cmd, flags, "manual", "approval-123", "compound remediation requested", plan, kclient.Kubernetes, "repo inventory snapshot"); err != nil {
 		t.Fatalf("executeSmartCompoundPlan: %v", err)
 	}
 

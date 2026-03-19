@@ -31,7 +31,7 @@ func (c *OpenAIClient) Complete(ctx context.Context, req Request) (Response, err
 	}
 	hc := c.HTTP
 	if hc == nil {
-		hc = &http.Client{Timeout: 60 * time.Second}
+		hc = &http.Client{Timeout: 5 * time.Minute}
 	}
 
 	payload := map[string]any{

@@ -24,6 +24,7 @@ type PRPlan struct {
 	CreatedAt     time.Time         `json:"createdAt"`
 	ApprovalID    string            `json:"approvalId,omitempty"`
 	Summary       string            `json:"summary"`
+	AgentPrompt   string            `json:"agentPrompt,omitempty"`
 	BranchName    string            `json:"branchName"`
 	CommitMessage string            `json:"commitMessage"`
 	PRTitle       string            `json:"prTitle"`

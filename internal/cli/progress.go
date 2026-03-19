@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/term"
 )
 
 type progressEvent struct {
@@ -19,6 +21,7 @@ type liveProgress struct {
 	isTTY      bool
 	label      string
 	current    string
+	currentAt  time.Time
 	lastStatic string
 	history    []progressEvent
 	maxHistory int
@@ -35,9 +38,14 @@ func newLiveProgress(out io.Writer, label string) *liveProgress {
 		done:       make(chan struct{}),
 		maxHistory: 8,
 	}
-	if f, ok := out.(*os.File); ok {
-		if st, err := f.Stat(); err == nil {
-			p.isTTY = (st.Mode() & os.ModeCharDevice) != 0
+	if fd, ok := writerFD(out); ok {
+		p.isTTY = term.IsTerminal(fd)
+	}
+	if !p.isTTY {
+		if f, ok := out.(*os.File); ok {
+			if st, err := f.Stat(); err == nil {
+				p.isTTY = (st.Mode() & os.ModeCharDevice) != 0
+			}
 		}
 	}
 	if p.isTTY {
@@ -54,12 +62,16 @@ func (p *liveProgress) Updatef(format string, args ...any) {
 	p.mu.Lock()
 	if msg != p.current {
 		p.appendEventLocked(msg)
+		p.currentAt = time.Now()
 	}
 	p.current = msg
 	isTTY := p.isTTY
 	duplicate := msg == p.lastStatic
-	if !isTTY && !duplicate {
+	if !duplicate {
 		p.lastStatic = msg
+	}
+	if isTTY && !duplicate {
+		p.logTTYLocked("[phase]", p.renderMessage(msg))
 	}
 	p.mu.Unlock()
 	if !isTTY && !duplicate {
@@ -75,6 +87,9 @@ func (p *liveProgress) Eventf(format string, args ...any) {
 	p.mu.Lock()
 	p.appendEventLocked(msg)
 	isTTY := p.isTTY
+	if isTTY {
+		p.logTTYLocked("  ->", p.renderMessage(msg))
+	}
 	p.mu.Unlock()
 	if !isTTY {
 		_, _ = fmt.Fprintf(p.out, "[event] %s\n", p.renderMessage(msg))
@@ -191,9 +206,13 @@ func (p *liveProgress) appendEventLocked(msg string) {
 
 func (p *liveProgress) renderLocked(frame string) {
 	lines := make([]string, 0, 1+len(p.history))
-	lines = append(lines, fmt.Sprintf("[%s] %s", frame, p.renderMessage(p.current)))
+	elapsed := ""
+	if !p.currentAt.IsZero() {
+		elapsed = fmt.Sprintf(" (%s)", time.Since(p.currentAt).Round(time.Second))
+	}
+	lines = append(lines, fmt.Sprintf("[%s] %s%s", frame, p.renderMessage(p.current), elapsed))
 	for _, event := range p.history {
-		lines = append(lines, fmt.Sprintf("  -> %s %s", event.at.Format("15:04:05"), event.text))
+		lines = append(lines, fmt.Sprintf("  -> %s %s", event.at.Format("15:04:05"), p.renderMessage(event.text)))
 	}
 
 	if p.rendered > 1 {
@@ -213,6 +232,25 @@ func (p *liveProgress) renderLocked(frame string) {
 		}
 	}
 	p.rendered = len(lines)
+}
+
+func (p *liveProgress) logTTYLocked(prefix, msg string) {
+	if !p.isTTY {
+		return
+	}
+	p.clearLocked()
+	p.rendered = 0
+	_, _ = fmt.Fprintf(p.out, "%s %s %s\n", prefix, time.Now().Format("15:04:05"), msg)
+}
+
+func writerFD(w io.Writer) (int, bool) {
+	type fdWriter interface {
+		Fd() uintptr
+	}
+	if fw, ok := w.(fdWriter); ok {
+		return int(fw.Fd()), true
+	}
+	return 0, false
 }
 
 func maxInt(a, b int) int {
