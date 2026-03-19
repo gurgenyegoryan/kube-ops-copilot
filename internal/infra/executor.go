@@ -278,7 +278,7 @@ func (w repoWorkspace) Cleanup(ctx context.Context) error {
 		errs = append(errs, fmt.Sprintf("remove temp dir: %v", err))
 	}
 	if len(errs) > 0 {
-		return fmt.Errorf(strings.Join(errs, "; "))
+		return fmt.Errorf("%s", strings.Join(errs, "; "))
 	}
 	return nil
 }
