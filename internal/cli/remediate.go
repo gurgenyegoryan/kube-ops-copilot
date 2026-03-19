@@ -52,39 +52,50 @@ func NewRemediateCmd() *cobra.Command {
 		Short: "One-command workflow: diagnose → propose 1 plan → request approval → execute",
 		Long:  "Runs deterministic diagnosis, asks an LLM for exactly one best executable plan, requests approval (e.g. Telegram), optionally waits, then applies the plan if approved.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			progress := newLiveProgress(cmd.OutOrStdout(), "remediate")
+			defer progress.Close()
 			provider := llm.Provider(strings.ToLower(strings.TrimSpace(f.Provider)))
 			if provider == "" {
 				provider = llm.ProviderNone
 			}
-			client, err := llm.New(llm.Config{Provider: provider, Model: f.Model, BaseURL: f.BaseURL, APIKey: f.APIKey})
+			progress.Updatef("initializing LLM client")
+			client, err := cliNewLLMClient(llm.Config{Provider: provider, Model: f.Model, BaseURL: f.BaseURL, APIKey: f.APIKey})
 			if err != nil {
+				progress.Failf("initializing LLM client")
 				return err
 			}
 			if client == nil {
+				progress.Failf("initializing LLM client")
 				return errors.New("no LLM provider configured (use --llm-provider or set KUBE_OPS_COPILOT_*_API_KEY)")
 			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), f.Timeout)
 			defer cancel()
 
-			kclient, err := kube.NewClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
+			progress.Updatef("connecting to cluster")
+			kclient, err := cliNewKubeClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
 			if err != nil {
+				progress.Failf("connecting to cluster")
 				return err
 			}
 
-			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, kclient.Kubernetes, f.IncludeSystemNamespaces, f.EventsSince)}
+			progress.Updatef("running analyzers")
+			e := engine.Engine{Analyzers: cliDefaultAnalyzers(ctx, kclient, f.IncludeSystemNamespaces, f.EventsSince), Progress: progress.Eventf}
 			results, err := e.Run(ctx)
 			if err != nil {
+				progress.Failf("running analyzers")
 				return err
 			}
 			if wr := warningResult(kclient.WarningCollector.Snapshot()); len(wr.Findings) > 0 || len(wr.Evidence) > 0 || len(wr.HiddenRisks) > 0 || len(wr.Recommended.ShortTerm) > 0 {
 				results = append(results, wr)
 			}
+			progress.Updatef("building diagnosis report")
 			rep := report.Build(results)
 			repJSON, err := json.Marshal(rep)
 			if err != nil {
 				return err
 			}
+			progress.Eventf("prepared diagnosis payload bytes=%d", len(repJSON))
 
 			system := strings.TrimSpace(`You are Kube Ops Copilot, an approval-driven Kubernetes SRE assistant.
 You must be evidence-first. Use the report as truth; do not invent cluster facts.
@@ -108,26 +119,34 @@ Output format requirements:
 
 			user := fmt.Sprintf("Here is the deterministic diagnosis report as JSON:\n\n%s\n\nTask:\n1) Provide triage order, likely root causes, and the next read-only verification commands.\n2) If telemetry is explicitly confirmed in the report, you may suggest backend-specific verification queries. If not, stay backend-agnostic.\n3) Provide the single best production remediation (if any).\n\nRules for remediation choice:\n- Only emit an executable plan if evidence supports it in THIS snapshot.\n- If root cause is unclear, emit null and focus on what to verify next.\n- If you propose a restart, justify it with evidence and include post-change verification.\n\nOutput format requirements:\n- First, Markdown.\n- Then a fenced code block: ```json ...``` containing either an ExecutionPlan object or null.\n\nExecutionPlan JSON schema (must match exactly):\n{\n  \"apiVersion\": \"kube-ops-copilot/v1alpha1\",\n  \"kind\": \"ExecutionPlan\",\n  \"createdAt\": \"RFC3339\",\n  \"approvalId\": \"\",\n  \"operation\": {\n    \"type\": \"rollout_restart_deployment|scale_deployment\",\n    \"namespace\": \"...\",\n    \"name\": \"...\",\n    \"replicas\": 3,\n    \"reason\": \"...\"\n  },\n  \"verify\": { \"timeoutSeconds\": 180 }\n}\n\nNotes:\n- For rollout_restart_deployment, omit replicas.\n- For scale_deployment, replicas is required.\n- approvalId must be empty string.\n", string(repJSON))
 
+			progress.Updatef("asking LLM for remediation recommendation")
+			progress.Eventf("submitting LLM request provider=%s model=%s", provider, strings.TrimSpace(f.Model))
 			resp, err := client.Complete(ctx, llm.Request{System: system, User: user, Model: f.Model, Temperature: f.Temperature})
 			if err != nil {
-				return err
+				progress.Failf("asking LLM for remediation recommendation")
+				return withLLMTimeoutHint(err, "remediate", f.Timeout)
 			}
 
 			plan, err := extractAndValidatePlan(resp.Text)
 			if err != nil {
+				progress.Failf("validating execution plan")
 				return err
 			}
 
 			md := stripJSONPlanBlock(resp.Text)
 			md = strings.TrimSpace(md)
-			_, _ = fmt.Fprintln(cmd.OutOrStdout(), md)
+			if md != "" {
+				progress.Printf("%s", md)
+			}
 
 			if plan == nil {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\n(no executable plan proposed for this snapshot)")
+				progress.Printf("(no executable plan proposed for this snapshot)")
 				if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot remediate", truncateForTelegram(md, 3500)); err != nil {
+					progress.Failf("sending notification")
 					return err
 				}
 				if !f.ApprovalOnNull {
+					progress.Donef("advisory-only result; no executable remediation plan proposed")
 					return nil
 				}
 
@@ -156,6 +175,7 @@ Output format requirements:
 					details = strings.TrimSpace(details[:900]) + "…"
 				}
 
+				progress.Updatef("requesting approval for review-only report")
 				_, err = ap.Request(ctx, approval.Request{
 					ApprovalID: approvalID,
 					Summary:    "review triage (no executable plan)",
@@ -164,24 +184,27 @@ Output format requirements:
 					Details:    details,
 				})
 				if err != nil {
+					progress.Failf("requesting approval for review-only report")
 					return err
 				}
 
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\napproval requested (no plan): provider=%s approval-id=%s\n", approvalProvider, approvalID)
+				progress.Printf("approval requested (no plan): provider=%s approval-id=%s", approvalProvider, approvalID)
 				if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot remediate (approval requested)", truncateForTelegram(fmt.Sprintf("approvalId=%s provider=%s operation=review_report target=%s\n\n%s", approvalID, approvalProvider, target, details), 3500)); err != nil {
+					progress.Failf("sending notification")
 					return err
 				}
 
 				if approvalProvider != string(approval.ProviderManual) {
 					if f.WaitApproval {
-						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "waiting for approval decision (timeout=%s)…\n", f.ApprovalTimeout)
+						progress.Updatef("waiting for approval decision (%s)", f.ApprovalTimeout)
 					}
 					if err := ensureApproved(cmd.Context(), approvalProvider, approvalID, f.WaitApproval, f.ApprovalTimeout); err != nil {
+						progress.Failf("approval was not granted")
 						return err
 					}
 				}
 
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "approval recorded; nothing to apply because plan is null")
+				progress.Donef("approval recorded; nothing to apply because plan is null")
 				return nil
 			}
 
@@ -205,6 +228,7 @@ Output format requirements:
 			if err != nil {
 				return err
 			}
+			progress.Updatef("writing plan file")
 			if err := os.WriteFile(planPath, b, 0o600); err != nil {
 				return err
 			}
@@ -226,6 +250,7 @@ Output format requirements:
 			if len(approvalDetails) > 900 {
 				approvalDetails = strings.TrimSpace(approvalDetails[:900]) + "…"
 			}
+			progress.Updatef("requesting approval")
 			_, err = ap.Request(ctx, approval.Request{
 				ApprovalID: approvalID,
 				Summary:    summary,
@@ -235,53 +260,61 @@ Output format requirements:
 				Details:    approvalDetails,
 			})
 			if err != nil {
+				progress.Failf("requesting approval")
 				return err
 			}
 
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\napproval requested: provider=%s approval-id=%s\n", approvalProvider, approvalID)
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "plan written: %s\n", planPath)
+			progress.Printf("approval requested: provider=%s approval-id=%s", approvalProvider, approvalID)
+			progress.Printf("plan written: %s", planPath)
 			if err := sendRemediateNotification(ctx, f.Notify, "kube-ops-copilot remediate (approval requested)", truncateForTelegram(fmt.Sprintf("approvalId=%s provider=%s op=%s target=%s/%s\nplan=%s", approvalID, approvalProvider, plan.Operation.Type, plan.Operation.Namespace, plan.Operation.Name, planPath), 3500)); err != nil {
+				progress.Failf("sending notification")
 				return err
 			}
 
 			if approvalProvider != string(approval.ProviderManual) {
 				if f.WaitApproval {
-					_, _ = fmt.Fprintf(cmd.OutOrStdout(), "waiting for approval decision (timeout=%s)…\n", f.ApprovalTimeout)
+					progress.Updatef("waiting for approval decision (%s)", f.ApprovalTimeout)
 				}
 				if err := ensureApproved(cmd.Context(), approvalProvider, approvalID, f.WaitApproval, f.ApprovalTimeout); err != nil {
+					progress.Failf("approval was not granted")
 					return err
 				}
 			}
 
 			if !f.Apply {
-				_, _ = fmt.Fprintln(cmd.OutOrStdout(), "\nnot applying changes (pass --apply to execute after approval)")
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "next: kube-ops-copilot execute --plan %s --approval-provider %s --approval-id %s --approve --dry-run=false\n", planPath, approvalProvider, approvalID)
+				progress.Printf("next: kube-ops-copilot execute --plan %s --approval-provider %s --approval-id %s --approve --dry-run=false", planPath, approvalProvider, approvalID)
+				progress.Donef("approval recorded; changes not applied because --apply was not requested")
 				return nil
 			}
 
 			// Extra safety: manual provider requires explicit --approve flag via execute; here we still keep apply gated by provider approval.
-			ex := exec.Executor{Client: kclient.Kubernetes}
+			progress.Updatef("executing approved remediation")
+			ex := exec.Executor{Client: kclient.Kubernetes, Progress: progress.Eventf}
 			res, err := ex.Apply(ctx, *plan)
 			if err != nil {
+				progress.Failf("executing approved remediation")
 				return err
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "applied: op=%s target=%s verified=%t duration=%s\n", res.Operation, res.Target, res.Verified, res.EndedAt.Sub(res.StartedAt))
+			progress.Printf("applied: op=%s target=%s verified=%t duration=%s", res.Operation, res.Target, res.Verified, res.EndedAt.Sub(res.StartedAt))
 
 			if f.Notify {
-				n := notify.NewFromConfig(notify.FromEnv())
+				progress.Updatef("sending notification")
+				n := cliNewNotifierFromEnv()
 				if n == nil {
+					progress.Failf("sending notification")
 					return fmt.Errorf("--notify set but no notifier configured; set KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL and/or KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN + KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID")
 				}
 				_ = n.Send(ctx, notify.Message{Title: "kube-ops-copilot remediate (applied)", Body: fmt.Sprintf("approvalId=%s op=%s target=%s verified=%t", approvalID, res.Operation, res.Target, res.Verified)})
 			}
 
+			progress.Donef("approved remediation executed")
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&f.Kubeconfig, "kubeconfig", "", "Path to kubeconfig (default: in-cluster; else $KUBECONFIG; else ~/.kube/config)")
 	cmd.Flags().StringVar(&f.Context, "context", "", "Kubeconfig context override (default: current-context)")
-	cmd.Flags().DurationVar(&f.Timeout, "timeout", 2*time.Minute, "Overall remediate timeout")
+	cmd.Flags().DurationVar(&f.Timeout, "timeout", 10*time.Minute, "Overall remediate timeout")
 	cmd.Flags().DurationVar(&f.EventsSince, "events-since", 60*time.Minute, "How far back to analyze Warning events")
 	cmd.Flags().BoolVar(&f.IncludeSystemNamespaces, "include-system-namespaces", false, "Include kube-system and other system namespaces in workload/resource/policy checks")
 
@@ -308,7 +341,7 @@ func sendRemediateNotification(ctx context.Context, enabled bool, title, body st
 	if !enabled {
 		return nil
 	}
-	n := notify.NewFromConfig(notify.FromEnv())
+	n := cliNewNotifierFromEnv()
 	if n == nil {
 		return fmt.Errorf("--notify set but no notifier configured; set KUBE_OPS_COPILOT_N8N_WEBHOOK_URL and/or KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL and/or KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN + KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID")
 	}

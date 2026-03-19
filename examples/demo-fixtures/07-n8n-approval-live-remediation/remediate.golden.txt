@@ -1,0 +1,43 @@
+## Triage order
+
+1. Exposed single-replica `payments/payments-api` is the clearest near-term incident path because telemetry shows restart growth on the same workload.
+2. Missing readiness probe on the same deployment increases the chance of partial failure during dependency issues or rollout churn.
+
+## Top likely root-cause hypothesis
+
+The dominant risk is not a single crash loop but a structurally fragile user-facing deployment that is already showing restart drift and rising CPU pressure.
+
+## Next read-only verification
+
+```bash
+kubectl -n payments get deploy,pod,svc,endpointslices payments-api
+kubectl -n payments describe deploy payments-api
+kubectl top pods -n payments --containers
+```
+
+## Single best remediation
+
+If `payments-api` is stateless enough for safe horizontal scaling, raise the replica floor from 1 to 2 as the smallest immediate mitigation, then validate whether HPA or request sizing should be the durable follow-up.
+
+```json
+{
+  "apiVersion": "kube-ops-copilot/v1alpha1",
+  "kind": "ExecutionPlan",
+  "createdAt": "2026-03-19T11:15:00Z",
+  "approvalId": "",
+  "operation": {
+    "type": "scale_deployment",
+    "namespace": "payments",
+    "name": "payments-api",
+    "replicas": 2,
+    "reason": "Expose-driven single-replica workload is showing restart and CPU pressure; increasing the replica floor is the smallest immediate availability mitigation if the workload is stateless enough."
+  },
+  "verify": {
+    "timeoutSeconds": 180
+  }
+}
+```
+
+approval requested: provider=n8n approval-id=0a7ff2c9-5b9c-48bf-9b66-6f1d42902b52
+plan written: /tmp/kube-ops-copilot-plan-0a7ff2c9-5b9c-48bf-9b66-6f1d42902b52.json
+waiting for approval decision (timeout=10m0s)…

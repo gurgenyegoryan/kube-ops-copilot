@@ -14,6 +14,7 @@ type Config struct {
 }
 
 type Client struct {
+	RESTConfig       *rest.Config
 	Kubernetes       *kubernetes.Clientset
 	WarningCollector *WarningCollector
 }
@@ -29,7 +30,7 @@ func NewClient(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Client{Kubernetes: cs, WarningCollector: warnings}, nil
+	return &Client{RESTConfig: restCfg, Kubernetes: cs, WarningCollector: warnings}, nil
 }
 
 func loadRESTConfig(cfg Config) (*rest.Config, error) {

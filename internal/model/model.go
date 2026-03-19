@@ -102,17 +102,27 @@ type ExecutionPlan struct {
 	ApprovalRequirement    ApprovalRequirement `json:"approvalRequirement"`
 }
 
+type SnapshotAssessment struct {
+	ProductionReadinessScore int        `json:"productionReadinessScore"`
+	OperationalRisk          Severity   `json:"operationalRisk"`
+	AutomationConfidence     Confidence `json:"automationConfidence"`
+	ObservabilityCoverage    string     `json:"observabilityCoverage"`
+	ConfidenceLimiters       []string   `json:"confidenceLimiters"`
+	TopRiskThemes            []string   `json:"topRiskThemes"`
+}
+
 type Report struct {
 	GeneratedAt time.Time `json:"generatedAt"`
 
-	ExecutiveSummary        string         `json:"executiveSummary"`
-	KeyFindings             []Finding      `json:"keyFindings"`
-	Evidence                []Evidence     `json:"evidence"`
-	Hypotheses              []Hypothesis   `json:"likelyRootCauseHypotheses"`
-	Recommended             Actions        `json:"recommendedActions"`
-	ProposedOperatorMessage string         `json:"proposedOperatorMessage"`
-	ExecutionPlan           *ExecutionPlan `json:"executionPlan,omitempty"`
-	HiddenRisks             []string       `json:"hiddenRisks"`
-	Unknowns                []string       `json:"unknowns"`
-	FinalVerdict            string         `json:"finalOperatorVerdict"`
+	ExecutiveSummary        string             `json:"executiveSummary"`
+	Assessment              SnapshotAssessment `json:"assessment"`
+	KeyFindings             []Finding          `json:"keyFindings"`
+	Evidence                []Evidence         `json:"evidence"`
+	Hypotheses              []Hypothesis       `json:"likelyRootCauseHypotheses"`
+	Recommended             Actions            `json:"recommendedActions"`
+	ProposedOperatorMessage string             `json:"proposedOperatorMessage"`
+	ExecutionPlan           *ExecutionPlan     `json:"executionPlan,omitempty"`
+	HiddenRisks             []string           `json:"hiddenRisks"`
+	Unknowns                []string           `json:"unknowns"`
+	FinalVerdict            string             `json:"finalOperatorVerdict"`
 }

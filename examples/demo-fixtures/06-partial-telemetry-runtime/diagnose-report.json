@@ -1,0 +1,101 @@
+{
+  "generatedAt": "2026-03-19T10:10:00Z",
+  "executiveSummary": "Telemetry backends are partially reachable in this snapshot, which improves confidence for some services but still leaves gaps in cross-signal diagnosis.",
+  "assessment": {
+    "productionReadinessScore": 66,
+    "operationalRisk": "medium",
+    "automationConfidence": "medium",
+    "observabilityCoverage": "confirmed",
+    "confidenceLimiters": [
+      "Logs backend is queryable, but traces coverage is only partially confirmed through runtime probes.",
+      "Backend proxy reachability does not guarantee complete scrape or retention coverage."
+    ],
+    "topRiskThemes": [
+      "platform/telemetry-runtime",
+      "workloads/probes"
+    ]
+  },
+  "keyFindings": [
+    {
+      "title": "Logs backend observability is reachable, but traces remain only partially queryable",
+      "severity": "medium",
+      "urgency": "this week",
+      "confidence": "medium",
+      "affectedScope": "platform/telemetry-runtime",
+      "whyItMatters": "Operators can confirm some log hotspots now, but dependency timing and trace-level latency paths are still only partially visible.",
+      "automationSuitability": "advisory_only"
+    }
+  ],
+  "evidence": [
+    {
+      "signal": "logs backend reachable: vendor=loki service=observability/loki-gateway signals=reachable labels=app,container,namespace,pod; log hotspot expr=topk(5, sum by (namespace,pod) (count_over_time({namespace=~\".+\",pod=~\".+\"} |~ \"(?i)(error|exception|panic|fatal)\" [15m])))"
+    },
+    {
+      "signal": "logs error hotspot: checkout/checkout-api-6b799d6f55-rl8w9 value=32 backend=loki"
+    },
+    {
+      "signal": "traces backend reachable: vendor=jaeger service=observability/jaeger-query signals=reachable tracedServices=12; sample service checkout-api operations=9"
+    },
+    {
+      "signal": "telemetry capability inventory: logs_backend=detected, resource_metrics=detected, telemetry_pipeline=detected, time_series_metrics=detected, traces_backend=detected"
+    }
+  ],
+  "likelyRootCauseHypotheses": [
+    {
+      "rank": 1,
+      "description": "Telemetry coverage is good enough to investigate actively, but still uneven enough that some dependency chains could remain opaque.",
+      "probability": "medium",
+      "supportingEvidence": [
+        {
+          "signal": "logs backend reachable: vendor=loki ..."
+        },
+        {
+          "signal": "traces backend reachable: vendor=jaeger ..."
+        }
+      ],
+      "contradictoryOrMissingEvidence": [
+        {
+          "signal": "Service-level latency, span error rates, and retention guarantees are not proven by reachability alone."
+        }
+      ],
+      "whatToVerifyNext": [
+        "Use the confirmed logs backend to inspect the checkout-api error hotspot.",
+        "Confirm whether Jaeger spans cover the same services seen in Kubernetes traffic paths.",
+        "Validate retention, scrape completeness, and alert coverage before treating telemetry as fully production-grade."
+      ]
+    }
+  ],
+  "recommendedActions": {
+    "immediate": [],
+    "shortTerm": [
+      {
+        "title": "Use the reachable Loki and Jaeger backends to verify whether checkout-api errors align with dependency latency or rollout events",
+        "expectedBenefit": "Turns partial telemetry reachability into actionable incident triage instead of relying only on kubectl snapshots.",
+        "riskTradeoff": "Low; read-only investigation.",
+        "priority": "P1",
+        "executionSafety": "safe_auto_candidate",
+        "approvalRequirement": "none",
+        "rollbackOutline": "N/A (no changes)"
+      }
+    ],
+    "preventive": [
+      {
+        "title": "Strengthen telemetry completeness checks so backend reachability and scrape/query coverage are validated separately",
+        "expectedBenefit": "Improves confidence that runtime adapters reflect real production observability, not just reachable endpoints.",
+        "riskTradeoff": "Requires more backend-specific validation logic and scenario coverage.",
+        "priority": "P2",
+        "executionSafety": "needs_operator_approval",
+        "approvalRequirement": "needs_operator_approval",
+        "rollbackOutline": "Revert added checks if they are too noisy or too vendor-specific."
+      }
+    ]
+  },
+  "proposedOperatorMessage": "Kube Ops Copilot: Loki and Jaeger are queryable in this snapshot, so checkout-api can now be investigated with real logs and traces instead of cluster shape alone. Best next step is to verify whether the error hotspot aligns with dependency latency or rollout timing.",
+  "hiddenRisks": [
+    "A reachable backend can still have incomplete retention, scrape coverage, or service tagging, so reachability should not be mistaken for perfect observability."
+  ],
+  "unknowns": [
+    "This fixture does not prove span completeness or alert coverage."
+  ],
+  "finalOperatorVerdict": "Use the newly confirmed telemetry paths for investigation, but continue to treat backend reachability and telemetry completeness as separate questions."
+}

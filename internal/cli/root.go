@@ -16,7 +16,9 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(NewDiagnoseCmd())
 	cmd.AddCommand(NewSuggestCmd())
 	cmd.AddCommand(NewRemediateCmd())
+	cmd.AddCommand(NewSmartRemediateCmd())
 	cmd.AddCommand(NewTerraformPRCmd())
+	cmd.AddCommand(NewInfraCmd())
 	cmd.AddCommand(NewApprovalCmd())
 	cmd.AddCommand(NewExecuteCmd())
 

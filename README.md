@@ -1,5 +1,9 @@
 # Kube Ops Copilot
 
+[![CI](https://github.com/gurgenyegoryan/kube-ops-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/gurgenyegoryan/kube-ops-copilot/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/gurgenyegoryan/kube-ops-copilot)](https://github.com/gurgenyegoryan/kube-ops-copilot)
+
 Kube Ops Copilot is an approval-driven Kubernetes reliability copilot.
 
 Its goal is not to print generic Kubernetes advice. Its goal is to inspect a real cluster, understand what capabilities actually exist, detect active and latent risks, and produce operator-grade recommendations with explicit safety boundaries.
@@ -24,6 +28,24 @@ This project is designed to do the opposite.
 
 It first discovers what is actually visible in the cluster, then adapts its analysis. If a capability is not confirmed, it should say so clearly instead of hallucinating advice around tools that may not exist.
 
+## Why People Switch From Generic AI To This
+
+Generic AI Kubernetes answers often sound confident but miss the operational reality:
+
+- they assume tooling that may not exist in your cluster
+- they jump to “restart the pod” before separating symptom from cause
+- they do not distinguish safe automation from approval-gated change
+- they do not know when the right fix belongs in GitOps/Terraform instead of a live patch
+- they rarely leave an audit trail that an SRE team would actually trust
+
+Kube Ops Copilot is built for the opposite workflow:
+
+- discover first, assume nothing
+- explain confidence and confidence limiters explicitly
+- propose the smallest safe remediation only when evidence supports it
+- switch between live remediation and infrastructure PR mode based on the real fix path
+- keep outputs shareable: operator message, execution plan, PR body, rollback notes, and verification checklist
+
 ## Core principles
 
 - Evidence-first: every finding should be grounded in observed Kubernetes state.
@@ -45,6 +67,7 @@ These always run:
 - events
 - workloads
 - resources
+- workload risk profiling
 - PDB checks
 - discovery
 
@@ -55,12 +78,28 @@ After capability discovery, the tool dynamically enables additional analyzers de
 Current examples:
 
 - telemetry coverage analyzer
+- runtime telemetry probes for discovered logs/traces backends
+- Prometheus-compatible long-window pressure correlation through Kubernetes service proxy
+- backend-specific telemetry query fallbacks for Prometheus-compatible, Loki, Jaeger, Tempo, and search-style backends
+- namespace/pod label alias normalization across Prometheus-compatible and Loki-style backends
 - traffic exposure analyzer
 - autoscaling posture analyzer
 - policy coverage analyzer
+- runtime resource metrics adapter for `metrics.k8s.io`
 - API warning/deprecation capture from Kubernetes warning headers
 
 This architecture is intended to grow. The point is that the agent should not be locked to a single observability stack or platform pattern.
+
+Every report now also carries a heuristic snapshot assessment:
+
+- production readiness score
+- operational risk
+- automation confidence
+- observability coverage status
+- confidence limiters
+- top risk themes
+
+This is meant to make each run easier to trust and easier to share with operators or stakeholders.
 
 ## What the tool tries to discover automatically
 
@@ -108,6 +147,10 @@ This is deliberately capability-oriented, not vendor-oriented.
 - pending PVCs
 - externally exposed services without ready endpoints
 - exposed single-replica workloads without autoscaling posture
+- workloads where several weak signals combine into one real incident path
+- live CPU/memory hotspots when Kubernetes resource metrics are confirmed
+- multi-hour restart/resource pressure when a Prometheus-compatible query backend is reachable
+- reachable Loki/Jaeger/Tempo-like backends and limited runtime enrichment when standard query paths are available
 - active namespaces missing basic policy defaults
 - observability coverage that is too weak to support confident production guidance
 
@@ -115,9 +158,48 @@ It also tries to surface hidden risks, for example:
 
 - clusters that look healthy at rest but lack autoscaling
 - workloads that are externally exposed but depend on a single replica
+- workloads that individually look “fine” but together lack probes, PDB, HPA, and endpoint headroom
 - telemetry gaps that make high-confidence suggestions impossible
 - namespaces likely to accumulate noisy-neighbor incidents because they lack guardrails
 - deprecated Kubernetes API usage that may break after a future cluster upgrade
+
+## When this is actually production-ready
+
+The honest answer: this project is already useful, but "production-ready" should mean more than "it runs."
+
+For this tool, production-ready means all of the following are true:
+
+- it can analyze unfamiliar clusters without assuming a specific vendor, observability stack, or repo layout
+- it can explain confidence and confidence limiters clearly instead of sounding certain when data is incomplete
+- it can rank real workload risk concentration, not just count isolated misconfigurations
+- it can choose the right remediation path between read-only advice, live guarded execution, and infrastructure PR mode
+- it leaves an audit trail: approval request, exact plan, rollback notes, verification steps, PR body, and result artifacts
+- it degrades safely when telemetry, RBAC, or repo context is missing
+- it is validated against realistic fixtures and CI, not only happy-path demos
+
+What is already strong today:
+
+- dynamic capability discovery instead of hardcoding Prometheus/Loki/GitOps assumptions
+- workload-level structural risk profiling across Services, Ingress, EndpointSlice, HPA, PDB, probes, and resources
+- runtime enrichment through the Kubernetes resource metrics API when `metrics.k8s.io` is confirmed
+- Prometheus-compatible long-window trend correlation through API server service proxy
+- runtime probing for Loki/Elasticsearch-like logs backends and Jaeger/Tempo-like traces backends when they are discoverable via Services
+- backend-specific fallback query intelligence for common Prometheus-compatible and Loki-style metrics/log query paths
+- portable namespace/pod label matching across canonical, `pod_name`, `kubernetes_*`, and `exported_*` label layouts
+- live-vs-infra remediation selection
+- Terraform/Terragrunt/OpenTofu-oriented PR execution flow with audit output
+- live progress/activity rendering so operators can see what the agent is doing
+- demo fixtures, golden outputs, and CI-covered report behavior
+
+What still needs to mature before the project deserves a full "production-max" claim:
+
+- deeper backend-specific adapters beyond the current safe fallback set, especially for more Tempo/Jaeger/OpenSearch variants and provider-specific metric conventions
+- stronger trend analysis across more query backends, not only `metrics.k8s.io` and Prometheus-compatible APIs
+- stronger repo mutation intelligence for complex Helm/Kustomize/Terragrunt graphs and richer cross-file edits
+- even more scenario coverage with regression tests for tricky real-world cases
+- more end-to-end verification around approval workflows, notifications, and PR automation against external systems
+
+That is the bar this project should be judged against. The goal is not generic Kubernetes advice. The goal is a reliable operator agent that still behaves well when the cluster, tooling, and infrastructure layout are unfamiliar.
 
 ## Install
 
@@ -145,7 +227,225 @@ Releases publish to GHCR:
 docker pull ghcr.io/<org>/<repo>:vX.Y.Z
 ```
 
+## License
+
+This project is licensed under the Apache License 2.0.
+
+See [LICENSE](./LICENSE).
+
 ## Quick start
+
+Long-running commands now show live progress in the terminal.
+
+- interactive terminals get a single refreshing status line
+- long phases such as cluster analysis, LLM planning, approval waiting, validation, git push, and PR creation update in place
+- the terminal now keeps a rolling activity feed under the live status line, so you can see what the agent is doing in the background instead of waiting on a silent spinner
+- this live activity feed now covers the long-running operator commands as well: `diagnose`, `suggest`, `remediate`, `smart-remediate`, `terraform-pr`, `execute`, and `infra execute`
+- durable events like approval ids, plan paths, and final results are still printed as normal lines
+- infra planning flows also write a repo inventory snapshot to `/tmp`, so when a Terraform PR plan is `null` you can inspect exactly what files and links the agent analyzed
+
+### Demo fixtures and golden outputs
+
+Launch-ready examples live in [examples/demo-fixtures](./examples/demo-fixtures/README.md).
+
+They include:
+
+- 8 production-style scenario fixtures
+- telemetry-rich scenarios for long-window hotspot correlation and partial backend reachability
+- golden `diagnose` Markdown output
+- golden `suggest` response with fenced execution plan
+- golden `terraform-pr` response with fenced infra PR plan
+- integration-style fake backend tests for Prometheus-compatible, Loki, Jaeger, and Tempo probe/query flows
+- analyzer-level fake Kube API tests for telemetry runtime and time-series correlation output
+- analyzer-level fake Kube API test for `metrics.k8s.io` runtime hotspot detection
+- compound workflow integration test covering live mitigation plus durable infra repo change
+- provider integration tests for N8N, Telegram, Slack, and manual approval/notification flows
+- full CLI command-flow tests with progress and output assertions for `diagnose`, `suggest`, `terraform-pr`, `execute`, and `infra execute`
+- opt-in live external E2E against a disposable kind cluster with disposable Prometheus/Loki/Jaeger/Tempo-compatible backends
+
+These fixtures are also covered by tests and benchmarks so they stay useful as the project evolves.
+
+### Live external E2E
+
+The repo now also includes a launch-hard live E2E harness:
+
+- disposable `kind` cluster
+- disposable in-cluster fake telemetry services that behave like Prometheus, Loki, Jaeger, and Tempo through Kubernetes service proxy paths
+- real `diagnose` runs against a live API server instead of only fake clients
+- opt-in Go tests under the `livee2e` build tag
+- a separate GitHub Actions workflow in [live-e2e.yml](./.github/workflows/live-e2e.yml)
+
+Local run:
+
+```bash
+bash hack/e2e/kind-live.sh up
+bash hack/e2e/kind-live.sh test
+```
+
+Cleanup:
+
+```bash
+bash hack/e2e/kind-live.sh down
+```
+
+The harness lives in [test/e2e](./test/e2e/README.md) and is intentionally separate from the normal CI path, so day-to-day checks stay fast while the project still has a real disposable-cluster confidence layer.
+
+### Terminal demos
+
+Ready-to-render terminal demo scripts live in [docs/demo](./docs/demo/README.md).
+
+They are intended for README media, launch posts, and product walkthroughs:
+
+- telemetry-rich `diagnose` demo
+- approval-driven `smart-remediate` demo
+- `vhs` tape files that can be rendered to GIF or SVG
+
+### Command cookbook
+
+These are the most useful copy-paste commands for daily use.
+
+Basic diagnosis:
+
+```bash
+./kube-ops-copilot diagnose \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --output markdown
+```
+
+LLM suggestions plus machine-readable plan:
+
+```bash
+./kube-ops-copilot suggest \
+  --llm-provider openai \
+  --llm-model gpt-5.4 \
+  --timeout 5m \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --plan-out /tmp/koc-plan.json
+```
+
+Approval-driven live remediation through n8n:
+
+```bash
+./kube-ops-copilot remediate \
+  --llm-provider openai \
+  --llm-model gpt-5.4 \
+  --timeout 10m \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --approval-provider n8n \
+  --notify \
+  --wait-approval \
+  --apply
+```
+
+Let the agent choose live fix vs infra PR:
+
+```bash
+./kube-ops-copilot smart-remediate \
+  --llm-provider openai \
+  --llm-model gpt-5.4 \
+  --repo-agent-provider codex-cli \
+  --timeout 10m \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --infra-repo-path ~/infra/live/prod \
+  --approval-provider n8n \
+  --notify \
+  --wait-approval \
+  --apply
+```
+
+Terraform/Terragrunt/OpenTofu PR flow:
+
+```bash
+./kube-ops-copilot terraform-pr \
+  --llm-provider openai \
+  --llm-model gpt-5.4 \
+  --repo-agent-provider codex-cli \
+  --timeout 10m \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --infra-repo-path ~/infra/live/prod \
+  --approval-provider n8n \
+  --notify \
+  --wait-approval \
+  --apply \
+  --git-push \
+  --open-pr \
+  --base-branch main
+```
+
+For heavy telemetry-rich clusters, large infrastructure repositories, or slower reasoning models such as `gpt-5.2` and `gpt-5.4`, prefer a larger timeout. The CLI now returns a direct hint when the LLM step times out, but these values are a good default starting point.
+
+Execute an already-approved live plan:
+
+```bash
+./kube-ops-copilot execute \
+  --plan /tmp/koc-plan.json \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --approval-provider n8n \
+  --approval-id APPROVAL-123 \
+  --approve \
+  --dry-run=false
+```
+
+Execute an already-approved infra plan:
+
+```bash
+./kube-ops-copilot infra execute \
+  --plan /tmp/koc-terraform-plan.json \
+  --infra-repo-path ~/infra/live/prod \
+  --repo-agent-provider claude-code \
+  --repo-inventory-file /tmp/kube-ops-copilot-infra-inventory.txt \
+  --approval-provider n8n \
+  --approval-id APPROVAL-123 \
+  --wait-approval \
+  --apply \
+  --git-push \
+  --open-pr
+```
+
+`--repo-agent-provider` enables a second repo-focused worker inside the provided infrastructure repo. Supported modes now include:
+- embedded LLM workers: `openai`, `anthropic`, `ollama`
+- external coding agents: `codex-cli`, `claude-code`
+
+In external agent mode, the repo agent now runs inside a temporary isolated `git worktree` on its own branch instead of editing the main working tree directly. After the agent finishes, the normal commit, push, PR, and Telegram notification flow runs from that isolated branch. The live terminal UI now shows explicit safety steps such as `creating isolated repo-agent worktree`, `preparing isolated repo-agent branch`, and `cleaning isolated repo-agent worktree`. Use `--repo-agent-command` if the binary is not on your default `PATH` or if you want to point to a wrapper script.
+
+Inspect an infra plan result:
+
+```bash
+./kube-ops-copilot infra status \
+  --plan /tmp/koc-terraform-plan.json \
+  --infra-repo-path ~/infra/live/prod
+```
+
+Request approval separately:
+
+```bash
+./kube-ops-copilot approval request \
+  --provider n8n \
+  --plan examples/execute-restart-deployment.json \
+  --write-plan
+```
+
+Check approval status:
+
+```bash
+./kube-ops-copilot approval status \
+  --provider n8n \
+  --approval-id APPROVAL-123
+```
+
+Run disposable live E2E:
+
+```bash
+bash hack/e2e/kind-live.sh up
+bash hack/e2e/kind-live.sh test
+bash hack/e2e/kind-live.sh down
+```
 
 ### 1. Deterministic diagnosis
 
@@ -290,12 +590,20 @@ Push branch and open PR:
 
 Important:
 
-- this mode is Terraform-only in the current version
+- this mode is Terraform-first, and the generic infra layer also supports `opentofu` and `terragrunt` plans
 - it edits only files present in the sampled repo inventory sent to the LLM
-- edits are applied as exact literal search/replace operations
+- repo narrowing is dependency-aware: the inventory now includes detected stacks, local module sources, terragrunt dependencies/includes, and higher-scored candidate files
+- local reference expansion is layout-agnostic: when wrapper files point to chart paths, values files, templates, manifests, Helmfile/Kustomize targets, shell entrypoints, or other repo-local targets, the inventory tries to pull those linked files in automatically instead of stopping at the wrapper layer
+- HCL resolution is now hybrid: the agent first tries a real HCL2 parser/evaluator layer for `locals`, `include`, `dependency`, `source`, and path-like attributes, then falls back to heuristics only when structural evaluation is inconclusive
+- Terragrunt evaluation goes deeper than raw string parsing: the resolver now understands `read_terragrunt_config(...)` and can carry `locals` and `inputs` through chained config files when that is required to find real chart paths or `values-<env>.yaml` files
+- the repo graph is multi-file, not HCL-only: it also follows Helm charts, Helmfile, Kustomize overlays, raw Kubernetes YAML, and command-style references such as `kubectl -f/-k`, `helm -f`, and `kustomize build`
+- repo narrowing is also semantic, not only structural: cluster findings like namespace/workload names are turned into environment and workload aliases so the inventory can prioritize likely owner files such as stage/service stacks, chart values/templates, kustomizations, or workload-specific modules even in unfamiliar layouts
+- it prefers HCL-aware edits like `hcl_set_attribute`, `hcl_delete_attribute`, `hcl_replace_block`, and `hcl_append_block_body`, with literal search/replace kept as fallback
+- HCL-aware attribute updates are multiline-friendly, so the executor can safely replace nested maps/lists instead of only one-line scalar values
 - by default it refuses to work in a dirty git repo
 - it does not run `terraform apply`
-- `terraform validate` is optional because many repos need backend/module init or wrapper tooling
+- validation is backend-aware: Terraform/OpenTofu validate changed module directories, and Terragrunt uses `hclvalidate` plus `validate-inputs` where a local stack is detected
+- generated PR bodies include a change summary, changed files, verification steps, risk matrix, post-merge checklist, and rollback guidance
 
 Useful flags:
 
@@ -307,7 +615,165 @@ Useful flags:
 - `--require-clean-repo`
 - `--plan-out`
 
-### 5. Execute an approved plan manually
+### 5. Smart unified remediation
+
+`smart-remediate` is the command that chooses the remediation path:
+
+- live Kubernetes action via `ExecutionPlan`
+- infra pull request via `InfraPRPlan`
+- or `null` if neither is justified
+
+Example:
+
+```bash
+./kube-ops-copilot smart-remediate \
+  --llm-provider openai \
+  --llm-model gpt-5.2 \
+  --kubeconfig ~/.kube/config \
+  --context prod \
+  --infra-repo-path ~/infra/live/prod \
+  --approval-provider n8n \
+  --wait-approval \
+  --apply \
+  --git-push \
+  --open-pr \
+  --base-branch main
+```
+
+Use this when you want the agent to decide whether the right fix is:
+
+- an immediate cluster change
+- a GitOps/Terraform PR
+- a compound plan: immediate live mitigation plus durable infra PR
+- or investigation only
+
+When a compound plan is applied, the tool also writes a lightweight orchestration trace next to the plan file:
+
+- `<plan>.compound-result.json` records phase state for `live` and `infra`
+- each phase has `pending`, `running`, `succeeded`, `failed`, or `skipped`
+- this makes it easier to understand whether the live mitigation succeeded before the repo branch/PR step started
+
+### 6. Infra execute and status
+
+You can also execute or inspect an infra plan directly.
+
+Execute an approved infra plan:
+
+```bash
+./kube-ops-copilot infra execute \
+  --plan /tmp/kube-ops-copilot-terraform-plan.json \
+  --infra-repo-path ~/infra/live/prod \
+  --approval-provider n8n \
+  --approval-id APPROVAL-123 \
+  --wait-approval \
+  --apply \
+  --git-push \
+  --open-pr
+```
+
+Inspect local status:
+
+```bash
+./kube-ops-copilot infra status \
+  --plan /tmp/kube-ops-copilot-terraform-plan.json \
+  --infra-repo-path ~/infra/live/prod
+```
+
+## Infra planning details
+
+The infrastructure planning path is intentionally conservative.
+
+### Dependency-aware repo narrowing
+
+Before the LLM is asked to propose a repo change, the tool builds a repo inventory that tries to answer:
+
+- which files look most relevant to the current cluster findings
+- which directories behave like stacks
+- which Terraform modules point at local sources
+- which Terragrunt files reference other stacks via `dependency`, `include`, or `terraform.source`
+- which Terragrunt configs compute their final targets through chained `locals`, `inputs`, and `read_terragrunt_config(...)`
+- which local path/file/chart/values references lead to the actual editable YAML, Helm, Helmfile, Kustomize, or template files
+- which shell or CI entrypoints point at those same files through `kubectl`, `helm`, `helmfile`, `kustomize`, `terraform`, `tofu`, or `terragrunt` commands
+- which repo paths are semantically close to the live cluster findings based on workload names, namespaces, and inferred environment names
+
+That inventory is then sampled and sent to the model instead of dumping the entire repository blindly.
+
+### Supported HCL-aware edit types
+
+Current structured edit types:
+
+- `hcl_set_attribute`
+- `hcl_delete_attribute`
+- `hcl_replace_block`
+- `hcl_append_block_body`
+- `search_replace` as fallback
+
+These are intended for precise repo updates such as:
+
+- changing replica defaults in a module
+- removing an unsafe attribute
+- replacing a whole resource or module block
+- appending a lifecycle stanza, tags block, or nested configuration block
+
+Example `InfraPRPlan` snippet:
+
+```json
+{
+  "kind": "InfraPRPlan",
+  "backend": "terraform",
+  "summary": "Raise Grafana replica count in the prod monitoring module",
+  "edits": [
+    {
+      "type": "hcl_set_attribute",
+      "path": "monitoring/grafana.tf",
+      "blockType": "module",
+      "labels": ["grafana"],
+      "attribute": "replicas",
+      "valueHCL": "2"
+    }
+  ]
+}
+```
+
+For nested expressions, `valueHCL` may also be multiline HCL:
+
+```hcl
+{
+  enabled = true
+  paths = [
+    "/readyz",
+    "/healthz",
+  ]
+}
+```
+
+### Backend-aware validation behavior
+
+The executor validates differently depending on the chosen backend:
+
+- Terraform: `terraform fmt -recursive` plus `terraform validate` in changed module directories when possible
+- OpenTofu: `tofu fmt -recursive` plus `tofu validate`
+- Terragrunt: `terragrunt hclfmt`, then `terragrunt hclvalidate` and `terragrunt validate-inputs` in changed stack directories
+
+This is intentionally more wrapper-aware than a single repo-root validate command, but still conservative enough to avoid assuming a custom wrapper that may not exist.
+
+### Smarter PR generation
+
+Generated PR bodies now try to be operator-friendly, not just git-friendly.
+
+They include:
+
+- the requested change summary
+- changed files
+- verification checklist
+- verification notes
+- risk matrix
+- post-merge checklist
+- rollback guidance
+
+This makes the PR readable for platform engineers who were not present when the remediation was proposed.
+
+### 7. Execute an approved plan manually
 
 Execution is dry-run by default.
 
@@ -534,9 +1000,10 @@ Current limitations are important:
 - the tool does not yet dynamically query every detected telemetry backend
 - some findings are still Kubernetes-native rather than full cross-signal correlation
 - absence of evidence is not proof of absence
-- Terraform PR mode currently supports only exact search/replace edits
-- Terraform PR mode assumes plain `git`, optional `gh`, and plain `terraform` workflows
+- HCL-aware edits currently focus on setting top-level block attributes and still fall back to literal search/replace for harder cases
+- Terraform PR mode assumes plain `git`, optional `gh`, and plain `terraform` / `tofu` / `terragrunt` workflows
 - very large or indirect Terraform repos may require passing a narrower `--infra-repo-path`
+- compound remediation is supported, but only as a sequential live-then-infra flow inside one plan
 
 In other words: this project is already designed to avoid shallow hardcoded advice, but it is still evolving toward deeper multi-backend runtime analysis.
 

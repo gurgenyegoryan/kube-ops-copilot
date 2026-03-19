@@ -1,0 +1,61 @@
+{
+  "generatedAt": "2026-03-18T10:15:00Z",
+  "executiveSummary": "Pending PVCs are the most immediate reliability risk in this snapshot because they can block stateful workload recovery and rollout convergence.",
+  "assessment": {
+    "productionReadinessScore": 49,
+    "operationalRisk": "high",
+    "automationConfidence": "low",
+    "observabilityCoverage": "confirmed",
+    "confidenceLimiters": [
+      "Storage root cause still needs class-level and event-level verification.",
+      "Stateful remediation has elevated blast radius and should stay manual-first."
+    ],
+    "topRiskThemes": [
+      "storage/pvc",
+      "cluster/pods"
+    ]
+  },
+  "keyFindings": [
+    {
+      "title": "2 persistent volume claim(s) are Pending",
+      "severity": "high",
+      "urgency": "immediate",
+      "confidence": "high",
+      "affectedScope": "storage/pvc",
+      "whyItMatters": "Pending claims can block stateful workload scheduling, prolong incidents, and turn restarts into outages.",
+      "automationSuitability": "manual_only"
+    }
+  ],
+  "evidence": [
+    {
+      "signal": "persistent volume claim inventory: total=7 pending=2 samplePending=payments/postgres-data-0, temporal/cassandra-data-0"
+    },
+    {
+      "signal": "storage class inventory: total=1 default=gp3-csi sample=gp3-csi"
+    }
+  ],
+  "likelyRootCauseHypotheses": [],
+  "recommendedActions": {
+    "immediate": [
+      {
+        "title": "Inspect PVC events, StorageClass binding mode, and matching PV capacity before any workload restart",
+        "expectedBenefit": "Avoids turning a storage provisioning issue into a broader incident.",
+        "riskTradeoff": "Takes more operator time before mitigation, but reduces stateful blast radius.",
+        "priority": "P1",
+        "executionSafety": "high_risk_manual_only",
+        "approvalRequirement": "high_risk_manual_only",
+        "rollbackOutline": "Not applicable; this is verification-first."
+      }
+    ],
+    "shortTerm": [],
+    "preventive": []
+  },
+  "proposedOperatorMessage": "Kube Ops Copilot: pending PVCs are the most urgent reliability issue here. Verify storage binding/provisioning before restarting any stateful workload.",
+  "hiddenRisks": [
+    "A stateful rollout can look like an application incident when the real blocker is storage binding."
+  ],
+  "unknowns": [
+    "Need PVC events and CSI provisioner logs to confirm whether the issue is capacity, topology, or class misconfiguration."
+  ],
+  "finalOperatorVerdict": "Keep remediation manual-first until storage root cause is confirmed."
+}

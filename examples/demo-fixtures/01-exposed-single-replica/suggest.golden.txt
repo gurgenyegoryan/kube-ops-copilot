@@ -1,0 +1,28 @@
+## Triage order
+
+1) **Exposed single-replica workload without HPA:** `gosell-test/prometheus-grafana`
+2) **Missing readiness/liveness probes:** 9 containers across multiple workloads
+3) **Read-only verification before any rollout:** confirm Service/endpoints and singleton constraints
+
+## Best next action
+
+The single best production remediation supported by this snapshot is to scale `gosell-test/prometheus-grafana` from 1 to 2 replicas after verifying it is safe to run more than one pod.
+
+```json
+{
+  "apiVersion": "kube-ops-copilot/v1alpha1",
+  "kind": "ExecutionPlan",
+  "createdAt": "2026-03-18T10:05:00Z",
+  "approvalId": "",
+  "operation": {
+    "type": "scale_deployment",
+    "namespace": "gosell-test",
+    "name": "prometheus-grafana",
+    "replicas": 2,
+    "reason": "Reduce exposed single-pod availability risk after verifying the workload is safe to run with two replicas."
+  },
+  "verify": {
+    "timeoutSeconds": 180
+  }
+}
+```
