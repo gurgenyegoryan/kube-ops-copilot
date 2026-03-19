@@ -12,6 +12,14 @@ They cover representative production-style scenarios instead of toy examples:
    Stateful workload degraded by pending PVCs and weak storage readiness.
 4. `04-terragrunt-helm-remediation`
    Durable remediation path that belongs in Terraform/Terragrunt + Helm values instead of a live patch.
+5. `05-time-series-correlated-hotspot`
+   Workload where Prometheus-compatible telemetry confirms multi-hour restart and resource pressure on top of structural fragility.
+6. `06-partial-telemetry-runtime`
+   Cluster where logs/traces backends are reachable enough for runtime investigation, but telemetry completeness still has limits.
+7. `07-n8n-approval-live-remediation`
+   End-to-end approval-gated live remediation example suitable for Telegram/n8n review flows.
+8. `08-smart-remediate-compound`
+   End-to-end compound remediation example combining a live mitigation with a durable infra PR.
 
 What is included:
 

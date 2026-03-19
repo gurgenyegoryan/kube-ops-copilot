@@ -47,7 +47,7 @@ func NewSuggestCmd() *cobra.Command {
 				provider = llm.ProviderNone
 			}
 			progress.Updatef("initializing LLM client")
-			client, err := llm.New(llm.Config{Provider: provider, Model: f.Model, BaseURL: f.BaseURL, APIKey: f.APIKey})
+			client, err := cliNewLLMClient(llm.Config{Provider: provider, Model: f.Model, BaseURL: f.BaseURL, APIKey: f.APIKey})
 			if err != nil {
 				progress.Failf("initializing LLM client")
 				return err
@@ -61,14 +61,14 @@ func NewSuggestCmd() *cobra.Command {
 			defer cancel()
 
 			progress.Updatef("connecting to cluster")
-			kclient, err := kube.NewClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
+			kclient, err := cliNewKubeClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
 			if err != nil {
 				progress.Failf("connecting to cluster")
 				return err
 			}
 
 			progress.Updatef("running analyzers")
-			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, kclient, f.IncludeSystemNamespaces, f.EventsSince), Progress: progress.Eventf}
+			e := engine.Engine{Analyzers: cliDefaultAnalyzers(ctx, kclient, f.IncludeSystemNamespaces, f.EventsSince), Progress: progress.Eventf}
 			results, err := e.Run(ctx)
 			if err != nil {
 				progress.Failf("running analyzers")
@@ -142,7 +142,7 @@ Output professional, concise Markdown.`)
 					progress = newLiveProgress(cmd.OutOrStdout(), "suggest")
 					defer progress.Close()
 					progress.Updatef("sending notification")
-					n := notify.NewFromConfig(notify.FromEnv())
+					n := cliNewNotifierFromEnv()
 					if n == nil {
 						progress.Failf("sending notification")
 						return fmt.Errorf("--notify set but no notifier configured; set KUBE_OPS_COPILOT_N8N_WEBHOOK_URL and/or KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL and/or KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN + KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID")
@@ -163,7 +163,7 @@ Output professional, concise Markdown.`)
 				progress = newLiveProgress(cmd.OutOrStdout(), "suggest")
 				defer progress.Close()
 				progress.Updatef("sending notification")
-				n := notify.NewFromConfig(notify.FromEnv())
+				n := cliNewNotifierFromEnv()
 				if n == nil {
 					progress.Failf("sending notification")
 					return fmt.Errorf("--notify set but no notifier configured; set KUBE_OPS_COPILOT_N8N_WEBHOOK_URL and/or KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL and/or KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN + KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID")

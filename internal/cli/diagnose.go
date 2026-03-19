@@ -36,14 +36,14 @@ func NewDiagnoseCmd() *cobra.Command {
 			defer cancel()
 
 			progress.Updatef("connecting to cluster")
-			client, err := kube.NewClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
+			client, err := cliNewKubeClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
 			if err != nil {
 				progress.Failf("connecting to cluster")
 				return err
 			}
 
 			progress.Updatef("running analyzers")
-			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, client, f.IncludeSystemNamespaces, f.EventsSince), Progress: progress.Eventf}
+			e := engine.Engine{Analyzers: cliDefaultAnalyzers(ctx, client, f.IncludeSystemNamespaces, f.EventsSince), Progress: progress.Eventf}
 			results, err := e.Run(ctx)
 			if err != nil {
 				progress.Failf("running analyzers")
@@ -64,7 +64,7 @@ func NewDiagnoseCmd() *cobra.Command {
 				progress = newLiveProgress(cmd.OutOrStdout(), "diagnose")
 				defer progress.Close()
 				progress.Updatef("sending notification")
-				n := notify.NewFromConfig(notify.FromEnv())
+				n := cliNewNotifierFromEnv()
 				if n == nil {
 					progress.Failf("sending notification")
 					return fmt.Errorf("--notify set but no notifier configured; set KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL and/or KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN + KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID")

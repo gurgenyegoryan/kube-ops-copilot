@@ -15,6 +15,8 @@ import (
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/resources"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/runtimemetrics"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/telemetrycoverage"
+	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/telemetryruntime"
+	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/timeseriespressure"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/trafficexposure"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/workloadrisk"
 	"github.com/gurgenyegoryan/kube-ops-copilot/internal/analyzer/workloads"
@@ -49,7 +51,7 @@ func defaultAnalyzers(ctx context.Context, client *kube.Client, includeSystemNam
 		&pdb.Analyzer{Client: client.Kubernetes, IncludeSystemNamespaces: includeSystemNamespaces},
 	}
 
-	detection, err := capability.Detect(ctx, client.Kubernetes, includeSystemNamespaces)
+	detection, err := capability.Detect(ctx, client.Kubernetes, true)
 	if err != nil {
 		return analyzers
 	}
@@ -77,8 +79,21 @@ func (telemetryAdapter) Name() string { return "telemetry" }
 func (telemetryAdapter) Match(inv capability.Inventory) bool {
 	return len(inv) > 0
 }
-func (telemetryAdapter) Build(_ *kube.Client, _ bool, inv capability.Inventory) []analyzer.Analyzer {
-	return []analyzer.Analyzer{&telemetrycoverage.Analyzer{Inventory: inv}}
+func (telemetryAdapter) Build(client *kube.Client, includeSystem bool, inv capability.Inventory) []analyzer.Analyzer {
+	analyzers := []analyzer.Analyzer{
+		&telemetrycoverage.Analyzer{Inventory: inv},
+	}
+	if inv["time_series_metrics"] != capability.NotConfirmed || inv["logs_backend"] != capability.NotConfirmed || inv["traces_backend"] != capability.NotConfirmed {
+		analyzers = append(analyzers, &telemetryruntime.Analyzer{Client: client, Inventory: inv})
+	}
+	if inv["time_series_metrics"] != capability.NotConfirmed {
+		analyzers = append(analyzers, &timeseriespressure.Analyzer{
+			Client:                  client,
+			Inventory:               inv,
+			IncludeSystemNamespaces: includeSystem,
+		})
+	}
+	return analyzers
 }
 
 type trafficAdapter struct{}

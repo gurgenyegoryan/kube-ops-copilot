@@ -308,7 +308,7 @@ func sendRemediateNotification(ctx context.Context, enabled bool, title, body st
 	if !enabled {
 		return nil
 	}
-	n := notify.NewFromConfig(notify.FromEnv())
+	n := cliNewNotifierFromEnv()
 	if n == nil {
 		return fmt.Errorf("--notify set but no notifier configured; set KUBE_OPS_COPILOT_N8N_WEBHOOK_URL and/or KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL and/or KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN + KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID")
 	}

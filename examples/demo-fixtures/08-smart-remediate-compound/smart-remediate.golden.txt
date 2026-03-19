@@ -1,0 +1,71 @@
+## Executive remediation choice
+
+Use a compound path.
+
+- Immediate mitigation: increase the live replica floor for `payments/payments-api` from 1 to 2 after approval.
+- Durable fix: open an infra PR in the Terraform/Terragrunt repo to add a conservative replica floor and follow-up HPA settings in code.
+
+## Why this path
+
+The cluster snapshot supports an immediate availability mitigation, but the durable fix belongs in infrastructure-as-code so the next rollout does not drift back to the unsafe baseline.
+
+```json
+{
+  "apiVersion": "kube-ops-copilot/v1alpha1",
+  "kind": "CompoundRemediationPlan",
+  "createdAt": "2026-03-19T11:30:00Z",
+  "approvalId": "",
+  "summary": "Raise live replica floor for payments-api and persist the fix in infra code",
+  "live": {
+    "apiVersion": "kube-ops-copilot/v1alpha1",
+    "kind": "ExecutionPlan",
+    "createdAt": "2026-03-19T11:30:00Z",
+    "approvalId": "",
+    "operation": {
+      "type": "scale_deployment",
+      "namespace": "payments",
+      "name": "payments-api",
+      "replicas": 2,
+      "reason": "Immediate mitigation for an exposed single-replica workload already showing restart drift and CPU pressure."
+    },
+    "verify": {
+      "timeoutSeconds": 180
+    }
+  },
+  "infra": {
+    "apiVersion": "kube-ops-copilot/v1alpha1",
+    "kind": "InfraPRPlan",
+    "backend": "terragrunt",
+    "createdAt": "2026-03-19T11:30:00Z",
+    "approvalId": "",
+    "summary": "Persist payments-api replica floor and HPA baseline",
+    "branchName": "koc/payments-api-replica-floor",
+    "commitMessage": "infra(payments): persist payments-api replica floor and HPA baseline",
+    "prTitle": "Persist payments-api replica floor and autoscaling baseline",
+    "prBody": "## Summary\nPersist the replica floor for payments-api and add a conservative autoscaling baseline.\n\n## Why\nThe live cluster shows restart drift and pressure on an exposed single-replica workload.\n\n## Rollback\nRevert this PR if the workload proves singleton-only or the autoscaling baseline causes instability.\n",
+    "edits": [
+      {
+        "type": "search_replace",
+        "path": "environments/prod/payments/terragrunt.hcl",
+        "search": "replica_count = 1",
+        "replace": "replica_count = 2"
+      }
+    ],
+    "verify": {
+      "commands": [
+        "terragrunt hclvalidate",
+        "terragrunt validate-inputs"
+      ],
+      "notes": [
+        "Verify that payments-api has no singleton assumptions before merging."
+      ]
+    },
+    "metadata": {
+      "risk_note": "Scaling a singleton workload can be unsafe if session or storage assumptions exist.",
+      "post_merge_check": "Confirm 2 ready pods and stable endpoints after the next rollout."
+    }
+  }
+}
+```
+
+approval requested: provider=n8n approval-id=ee3d9b66-617a-4a80-ab5f-875857f02f9d

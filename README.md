@@ -1,5 +1,9 @@
 # Kube Ops Copilot
 
+[![CI](https://github.com/gurgenyegoryan/kube-ops-copilot/actions/workflows/ci.yml/badge.svg)](https://github.com/gurgenyegoryan/kube-ops-copilot/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](./LICENSE)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/gurgenyegoryan/kube-ops-copilot)](https://github.com/gurgenyegoryan/kube-ops-copilot)
+
 Kube Ops Copilot is an approval-driven Kubernetes reliability copilot.
 
 Its goal is not to print generic Kubernetes advice. Its goal is to inspect a real cluster, understand what capabilities actually exist, detect active and latent risks, and produce operator-grade recommendations with explicit safety boundaries.
@@ -74,6 +78,10 @@ After capability discovery, the tool dynamically enables additional analyzers de
 Current examples:
 
 - telemetry coverage analyzer
+- runtime telemetry probes for discovered logs/traces backends
+- Prometheus-compatible long-window pressure correlation through Kubernetes service proxy
+- backend-specific telemetry query fallbacks for Prometheus-compatible, Loki, Jaeger, Tempo, and search-style backends
+- namespace/pod label alias normalization across Prometheus-compatible and Loki-style backends
 - traffic exposure analyzer
 - autoscaling posture analyzer
 - policy coverage analyzer
@@ -141,6 +149,8 @@ This is deliberately capability-oriented, not vendor-oriented.
 - exposed single-replica workloads without autoscaling posture
 - workloads where several weak signals combine into one real incident path
 - live CPU/memory hotspots when Kubernetes resource metrics are confirmed
+- multi-hour restart/resource pressure when a Prometheus-compatible query backend is reachable
+- reachable Loki/Jaeger/Tempo-like backends and limited runtime enrichment when standard query paths are available
 - active namespaces missing basic policy defaults
 - observability coverage that is too weak to support confident production guidance
 
@@ -172,6 +182,10 @@ What is already strong today:
 - dynamic capability discovery instead of hardcoding Prometheus/Loki/GitOps assumptions
 - workload-level structural risk profiling across Services, Ingress, EndpointSlice, HPA, PDB, probes, and resources
 - runtime enrichment through the Kubernetes resource metrics API when `metrics.k8s.io` is confirmed
+- Prometheus-compatible long-window trend correlation through API server service proxy
+- runtime probing for Loki/Elasticsearch-like logs backends and Jaeger/Tempo-like traces backends when they are discoverable via Services
+- backend-specific fallback query intelligence for common Prometheus-compatible and Loki-style metrics/log query paths
+- portable namespace/pod label matching across canonical, `pod_name`, `kubernetes_*`, and `exported_*` label layouts
 - live-vs-infra remediation selection
 - Terraform/Terragrunt/OpenTofu-oriented PR execution flow with audit output
 - live progress/activity rendering so operators can see what the agent is doing
@@ -179,9 +193,10 @@ What is already strong today:
 
 What still needs to mature before the project deserves a full "production-max" claim:
 
-- deeper runtime adapters for confirmed logs/traces backends and richer long-window time-series analysis beyond `metrics.k8s.io` snapshots
+- deeper backend-specific adapters beyond the current safe fallback set, especially for more Tempo/Jaeger/OpenSearch variants and provider-specific metric conventions
+- stronger trend analysis across more query backends, not only `metrics.k8s.io` and Prometheus-compatible APIs
 - stronger repo mutation intelligence for complex Helm/Kustomize/Terragrunt graphs and richer cross-file edits
-- more scenario coverage with regression tests for tricky real-world cases
+- even more scenario coverage with regression tests for tricky real-world cases
 - more end-to-end verification around approval workflows, notifications, and PR automation against external systems
 
 That is the bar this project should be judged against. The goal is not generic Kubernetes advice. The goal is a reliable operator agent that still behaves well when the cluster, tooling, and infrastructure layout are unfamiliar.
@@ -212,6 +227,12 @@ Releases publish to GHCR:
 docker pull ghcr.io/<org>/<repo>:vX.Y.Z
 ```
 
+## License
+
+This project is licensed under the Apache License 2.0.
+
+See [LICENSE](./LICENSE).
+
 ## Quick start
 
 Long-running commands now show live progress in the terminal.
@@ -224,16 +245,59 @@ Long-running commands now show live progress in the terminal.
 
 ### Demo fixtures and golden outputs
 
-Launch-ready examples live in [examples/demo-fixtures](/home/gurgen/projects/personal/k8s-aiagent/examples/demo-fixtures/README.md).
+Launch-ready examples live in [examples/demo-fixtures](./examples/demo-fixtures/README.md).
 
 They include:
 
-- 4 production-style scenario fixtures
+- 8 production-style scenario fixtures
+- telemetry-rich scenarios for long-window hotspot correlation and partial backend reachability
 - golden `diagnose` Markdown output
 - golden `suggest` response with fenced execution plan
 - golden `terraform-pr` response with fenced infra PR plan
+- integration-style fake backend tests for Prometheus-compatible, Loki, Jaeger, and Tempo probe/query flows
+- analyzer-level fake Kube API tests for telemetry runtime and time-series correlation output
+- analyzer-level fake Kube API test for `metrics.k8s.io` runtime hotspot detection
+- compound workflow integration test covering live mitigation plus durable infra repo change
+- provider integration tests for N8N, Telegram, Slack, and manual approval/notification flows
+- full CLI command-flow tests with progress and output assertions for `diagnose`, `suggest`, `terraform-pr`, `execute`, and `infra execute`
+- opt-in live external E2E against a disposable kind cluster with disposable Prometheus/Loki/Jaeger/Tempo-compatible backends
 
 These fixtures are also covered by tests and benchmarks so they stay useful as the project evolves.
+
+### Live external E2E
+
+The repo now also includes a launch-hard live E2E harness:
+
+- disposable `kind` cluster
+- disposable in-cluster fake telemetry services that behave like Prometheus, Loki, Jaeger, and Tempo through Kubernetes service proxy paths
+- real `diagnose` runs against a live API server instead of only fake clients
+- opt-in Go tests under the `livee2e` build tag
+- a separate GitHub Actions workflow in [live-e2e.yml](./.github/workflows/live-e2e.yml)
+
+Local run:
+
+```bash
+bash hack/e2e/kind-live.sh up
+bash hack/e2e/kind-live.sh test
+```
+
+Cleanup:
+
+```bash
+bash hack/e2e/kind-live.sh down
+```
+
+The harness lives in [test/e2e](./test/e2e/README.md) and is intentionally separate from the normal CI path, so day-to-day checks stay fast while the project still has a real disposable-cluster confidence layer.
+
+### Terminal demos
+
+Ready-to-render terminal demo scripts live in [docs/demo](./docs/demo/README.md).
+
+They are intended for README media, launch posts, and product walkthroughs:
+
+- telemetry-rich `diagnose` demo
+- approval-driven `smart-remediate` demo
+- `vhs` tape files that can be rendered to GIF or SVG
 
 ### 1. Deterministic diagnosis
 

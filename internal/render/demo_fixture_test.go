@@ -23,12 +23,27 @@ func TestDemoFixtureDiagnoseGolden(t *testing.T) {
 	}
 }
 
+func TestDemoFixtureDiagnoseGoldenTimeSeries(t *testing.T) {
+	reportPath := demoFixturePath(t, "05-time-series-correlated-hotspot", "diagnose-report.json")
+	goldenPath := demoFixturePath(t, "05-time-series-correlated-hotspot", "diagnose.golden.md")
+
+	var rep model.Report
+	mustReadJSON(t, reportPath, &rep)
+	got := Markdown(rep)
+	want := mustReadText(t, goldenPath)
+	if strings.TrimSpace(got) != strings.TrimSpace(want) {
+		t.Fatalf("golden mismatch for %s\n--- got ---\n%s\n--- want ---\n%s", reportPath, got, want)
+	}
+}
+
 func BenchmarkMarkdownDemoFixtures(b *testing.B) {
 	paths := []string{
 		demoFixturePath(b, "01-exposed-single-replica", "diagnose-report.json"),
 		demoFixturePath(b, "02-telemetry-blind-cluster", "diagnose-report.json"),
 		demoFixturePath(b, "03-pending-pvc-storage-risk", "diagnose-report.json"),
 		demoFixturePath(b, "04-terragrunt-helm-remediation", "diagnose-report.json"),
+		demoFixturePath(b, "05-time-series-correlated-hotspot", "diagnose-report.json"),
+		demoFixturePath(b, "06-partial-telemetry-runtime", "diagnose-report.json"),
 	}
 	reports := make([]model.Report, 0, len(paths))
 	for _, path := range paths {

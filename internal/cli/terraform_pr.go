@@ -70,7 +70,7 @@ func NewTerraformPRCmd() *cobra.Command {
 				provider = llm.ProviderNone
 			}
 			progress.Updatef("initializing LLM client")
-			client, err := llm.New(llm.Config{Provider: provider, Model: f.Model, BaseURL: f.BaseURL, APIKey: f.APIKey})
+			client, err := cliNewLLMClient(llm.Config{Provider: provider, Model: f.Model, BaseURL: f.BaseURL, APIKey: f.APIKey})
 			if err != nil {
 				progress.Failf("initializing LLM client")
 				return err
@@ -84,13 +84,13 @@ func NewTerraformPRCmd() *cobra.Command {
 			defer cancel()
 
 			progress.Updatef("connecting to cluster")
-			kclient, err := kube.NewClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
+			kclient, err := cliNewKubeClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
 			if err != nil {
 				progress.Failf("connecting to cluster")
 				return err
 			}
 			progress.Updatef("running analyzers")
-			e := engine.Engine{Analyzers: defaultAnalyzers(ctx, kclient, f.IncludeSystemNamespaces, f.EventsSince), Progress: progress.Eventf}
+			e := engine.Engine{Analyzers: cliDefaultAnalyzers(ctx, kclient, f.IncludeSystemNamespaces, f.EventsSince), Progress: progress.Eventf}
 			results, err := e.Run(ctx)
 			if err != nil {
 				progress.Failf("running analyzers")
@@ -106,7 +106,7 @@ func NewTerraformPRCmd() *cobra.Command {
 			}
 
 			progress.Updatef("building infrastructure repository inventory")
-			repoInventory, err := buildTerraformRepoInventory(f.InfraRepoPath, string(repJSON), 60, 180000)
+			repoInventory, err := cliBuildTerraformRepoInventory(f.InfraRepoPath, string(repJSON), 60, 180000)
 			if err != nil {
 				progress.Failf("building infrastructure repository inventory")
 				return err

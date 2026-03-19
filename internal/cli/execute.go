@@ -86,7 +86,7 @@ func NewExecuteCmd() *cobra.Command {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "dry-run: no changes executed; approval validated (approval-id=%s)\n", f.ApprovalID)
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "plan: op=%s target=%s/%s approval-provider=%s\n", plan.Operation.Type, plan.Operation.Namespace, plan.Operation.Name, provider)
 				if f.Notify {
-					n := notify.NewFromConfig(notify.FromEnv())
+					n := cliNewNotifierFromEnv()
 					if n == nil {
 						return fmt.Errorf("--notify set but no notifier configured; set KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL and/or KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN + KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID")
 					}
@@ -99,7 +99,7 @@ func NewExecuteCmd() *cobra.Command {
 			defer cancel()
 
 			progress.Updatef("connecting to cluster")
-			client, err := kube.NewClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
+			client, err := cliNewKubeClient(kube.Config{Kubeconfig: f.Kubeconfig, Context: f.Context})
 			if err != nil {
 				progress.Failf("connecting to cluster")
 				return err
@@ -114,7 +114,7 @@ func NewExecuteCmd() *cobra.Command {
 			progress.Donef("approved remediation executed")
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "executed: op=%s target=%s verified=%t duration=%s\n", result.Operation, result.Target, result.Verified, result.EndedAt.Sub(result.StartedAt))
 			if f.Notify {
-				n := notify.NewFromConfig(notify.FromEnv())
+				n := cliNewNotifierFromEnv()
 				if n == nil {
 					return fmt.Errorf("--notify set but no notifier configured; set KUBE_OPS_COPILOT_SLACK_WEBHOOK_URL and/or KUBE_OPS_COPILOT_TELEGRAM_BOT_TOKEN + KUBE_OPS_COPILOT_TELEGRAM_CHAT_ID")
 				}

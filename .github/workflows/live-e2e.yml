@@ -1,0 +1,48 @@
+name: Live E2E
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  live-e2e:
+    name: Disposable kind + live telemetry E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up kind
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: kube-ops-copilot-e2e
+          wait: 120s
+
+      - name: Deploy disposable E2E stack
+        run: bash hack/e2e/kind-live.sh up
+
+      - name: Run live E2E tests
+        run: bash hack/e2e/kind-live.sh test
+
+      - name: Dump cluster state on failure
+        if: failure()
+        run: |
+          export KUBECONFIG=/tmp/kube-ops-copilot-e2e-kubeconfig
+          kubectl get pods -A -o wide || true
+          kubectl get svc -A || true
+          kubectl get endpointslices -A || true
+          kubectl logs -n monitoring deploy/prometheus || true
+          kubectl logs -n observability deploy/loki || true
+          kubectl logs -n observability deploy/jaeger-query || true
+          kubectl logs -n observability deploy/tempo || true
